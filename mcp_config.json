@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "hipai-montague": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/your-path-to/HiPAI-Montague-Semantic-Cognition",
+        "run",
+        "python",
+        "-m",
+        "hipai.mcp_server"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  }
+}

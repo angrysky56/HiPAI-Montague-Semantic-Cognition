@@ -1,0 +1,134 @@
+src/hipai/models.py:41:89: E501 Line too long (92 > 88)
+   |
+39 |     """
+40 |
+41 |     name: str = Field(..., description="The name of the property, e.g., 'Human', 'Mortal'.")
+   |                                                                                         ^^^^ E501
+42 |     description: str | None = Field(
+43 |         default=None, description="Optional description of the property."
+   |
+
+src/hipai/models.py:98:89: E501 Line too long (89 > 88)
+    |
+ 96 |     conflicting_assertions: list[dict[str, Any]] = Field(
+ 97 |         default_factory=list,
+ 98 |         description="The specific propositions or relations that contradict each other.",
+    |                                                                                         ^ E501
+ 99 |     )
+100 |     resolution_strategy: Literal["reject_new", "override_old", "escalate"] = Field(
+    |
+
+src/hipai/semantics.py:57:89: E501 Line too long (100 > 88)
+   |
+56 |         if self.expr_type.domain != arg.expr_type:
+57 |             raise TypeError(f"Type mismatch: expected {self.expr_type.domain}, got {arg.expr_type}")
+   |                                                                                         ^^^^^^^^^^^^ E501
+58 |
+59 |         # Apply the function
+   |
+
+src/hipai/semantics.py:63:89: E501 Line too long (176 > 88)
+   |
+61 | …
+62 | …
+63 | …ne: result_val, # Handle both functional and non-functional returns, but a bit hacky for a simple evaluator.
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ E501
+64 | …
+65 | …
+   |
+
+src/hipai/semantics.py:88:89: E501 Line too long (107 > 88)
+   |
+87 | class SemanticEngine:
+88 |     def compose_forward(self, func_expr: LambdaExpression, arg_expr: LambdaExpression) -> LambdaExpression:
+   |                                                                                         ^^^^^^^^^^^^^^^^^^^ E501
+89 |         """Forward application: func(arg)"""
+90 |         return func_expr.apply(arg_expr)
+   |
+
+src/hipai/semantics.py:92:89: E501 Line too long (108 > 88)
+   |
+90 |         return func_expr.apply(arg_expr)
+91 |
+92 |     def compose_backward(self, arg_expr: LambdaExpression, func_expr: LambdaExpression) -> LambdaExpression:
+   |                                                                                         ^^^^^^^^^^^^^^^^^^^^ E501
+93 |         """Backward application: arg func -> func(arg)"""
+94 |         return func_expr.apply(arg_expr)
+   |
+
+src/hipai/semantics.py:96:89: E501 Line too long (102 > 88)
+   |
+94 |         return func_expr.apply(arg_expr)
+95 |
+96 |     def apply_type_driven(self, expr1: LambdaExpression, expr2: LambdaExpression) -> LambdaExpression:
+   |                                                                                         ^^^^^^^^^^^^^^ E501
+97 |         """Attempts to compose two expressions based on their types."""
+98 |         # Try forward: expr1(expr2)
+   |
+
+src/hipai/semantics.py:99:89: E501 Line too long (98 > 88)
+    |
+ 97 |         """Attempts to compose two expressions based on their types."""
+ 98 |         # Try forward: expr1(expr2)
+ 99 |         if isinstance(expr1.expr_type, ComplexType) and expr1.expr_type.domain == expr2.expr_type:
+    |                                                                                         ^^^^^^^^^^ E501
+100 |             return self.compose_forward(expr1, expr2)
+    |
+
+src/hipai/semantics.py:103:89: E501 Line too long (98 > 88)
+    |
+102 |         # Try backward: expr2(expr1)
+103 |         if isinstance(expr2.expr_type, ComplexType) and expr2.expr_type.domain == expr1.expr_type:
+    |                                                                                         ^^^^^^^^^^ E501
+104 |             return self.compose_backward(expr1, expr2)
+    |
+
+src/hipai/sources.py:41:89: E501 Line too long (89 > 88)
+   |
+40 |     async def get_texts(self) -> AsyncGenerator[str]:
+41 |         # Using a simple synchronous request inside an async generator for demonstration.
+   |                                                                                         ^ E501
+42 |         # In a production system, this should use aiohttp or httpx.
+43 |         try:
+   |
+
+src/hipai/sources.py:44:89: E501 Line too long (89 > 88)
+   |
+42 |         # In a production system, this should use aiohttp or httpx.
+43 |         try:
+44 |             req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0'})
+   |                                                                                         ^ E501
+45 |             with urllib.request.urlopen(req) as response:
+46 |                 html = response.read()
+   |
+
+src/hipai/synthesis.py:17:89: E501 Line too long (92 > 88)
+   |
+15 |     def synthesize_concepts(self, property_threshold: int = 1) -> list[str]:
+16 |         """
+17 |         Generates Structure Notes based on common properties among Content Nodes (Entities).
+   |                                                                                         ^^^^ E501
+18 |         If entities share a property, a Concept is generated in the graph.
+19 |         Returns a list of created concept names.
+   |
+
+tests/test_semantics.py:30:89: E501 Line too long (116 > 88)
+   |
+29 |     # And a property "runs"
+30 |     runs = LambdaExpression(expr_type=ComplexType(TYPE_E, TYPE_T), func=lambda x: f"run({x(None)})", repr_str="run")
+   |                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ E501
+31 |     
+32 |     # Apply forward
+   |
+
+tests/test_semantics.py:42:89: E501 Line too long (116 > 88)
+   |
+40 | def test_type_driven_composition():
+41 |     john = LambdaExpression(expr_type=TYPE_E, func=lambda x: "John", repr_str="j")
+42 |     runs = LambdaExpression(expr_type=ComplexType(TYPE_E, TYPE_T), func=lambda x: f"run({x(None)})", repr_str="run")
+   |                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ E501
+43 |     
+44 |     engine = SemanticEngine()
+   |
+
+Found 14 errors.
