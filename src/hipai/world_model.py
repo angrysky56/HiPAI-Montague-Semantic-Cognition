@@ -125,7 +125,10 @@ class WorldModel:
                     props_to_process = {p: True for p in props_to_process}
 
                 for prop, val in props_to_process.items():
-                    prop_sanitized = "".join(c for c in prop if c.isalnum() or c == "_")
+                    # Replace spaces and hyphens with underscores before sanitizing
+                    # so "hard interrupt" -> "hard_interrupt" not "hardinterrupt"
+                    prop_normalized = prop.replace(" ", "_").replace("-", "_")
+                    prop_sanitized = "".join(c for c in prop_normalized if c.isalnum() or c == "_")
                     is_negation = prop_sanitized.startswith("not_")
                     base_prop = prop_sanitized[4:] if is_negation else prop_sanitized
 

@@ -255,7 +255,7 @@ class HIPAIManager:
                 q = (
                     f"MATCH (c:Concept {{name: "
                     f"'{concept_name}'}}) "
-                    f"SET c.prop_{obj_property} = true"
+                    f"SET c.prop_{obj_property.strip().replace(' ', '_').replace('-', '_')} = true"
                 )
                 self.world_model.query_graph(q)
                 return {
@@ -315,8 +315,10 @@ class HIPAIManager:
                 ),
             }
 
-        # Normalize the predicate to match how properties are stored
-        obj = obj.strip().lower().replace(" ", "_")
+        # Normalize the predicate: strip whitespace and replace spaces/hyphens
+        # with underscores, but preserve original case to match FalkorDB's
+        # case-sensitive property keys (e.g. "WelfareBeing" not "welfarebeing").
+        obj = obj.strip().replace(" ", "_").replace("-", "_")
         subject = subject.strip()
 
 
@@ -339,10 +341,18 @@ class HIPAIManager:
         prop_sanitized = "".join(c for c in obj if c.isalnum() or c == "_")
         expected_val = not is_negation
 
+        # Check the entity directly first, then via INSTANCE_OF inheritance.
+        # Two-part union: direct property on entity, and inherited from concepts.
+        # FalkorDB variable-length zero-hop (*0..) is unreliable; use explicit
+        # UNION to cover both cases.
         q_check = f"""
-        MATCH (n:Entity {{id: $subject}})-[:INSTANCE_OF*0..]->(c)
+        MATCH (n:Entity {{id: $subject}})
+        WHERE n.prop_{prop_sanitized} IS NOT NULL
+        RETURN n.name AS source_node, n.prop_{prop_sanitized} AS val
+        UNION
+        MATCH (n:Entity {{id: $subject}})-[:INSTANCE_OF]->(c)
         WHERE c.prop_{prop_sanitized} IS NOT NULL
-        RETURN c.name as source_node, c.prop_{prop_sanitized} as val
+        RETURN c.name AS source_node, c.prop_{prop_sanitized} AS val
         """
 
         try:
