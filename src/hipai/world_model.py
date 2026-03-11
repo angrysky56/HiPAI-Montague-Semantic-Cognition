@@ -1,13 +1,17 @@
+"""Module for managing the FalkorDB-based world model for HiPAI."""
+
+import contextlib
 import logging
 import os
-
-# Suppress PyTorch CUDA warnings by hiding GPUs, as we use CPU for the small embedding model
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 from falkordb import FalkorDB
 from sentence_transformers import SentenceTransformer
 
 from .models import Observation
+
+# Suppress PyTorch CUDA warnings by hiding GPUs,
+# as we use CPU for the small embedding model
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +24,10 @@ class WorldModel:
       2. Structure Notes: Concept Categories
       3. Main Structure Notes: Domain Ontologies
     """
-    def __init__(self, host: str = "localhost", port: int = 6380, graph_name: str = "hipai"):
+
+    def __init__(
+        self, host: str = "localhost", port: int = 6380, graph_name: str = "hipai"
+    ):
         """Initializes the World Model with a FalkorDB connection."""
         self.host = host
         self.port = port
@@ -38,9 +45,18 @@ class WorldModel:
         """Ensure we are connected to the right graph and indices are set up."""
         # Create vector indices if they don't exist
         try:
-            self.graph.query(f"CALL db.idx.vector.add('Entity', 'embedding', {self.vector_dim}, 'COSINE')")
-            self.graph.query(f"CALL db.idx.vector.add('Concept', 'embedding', {self.vector_dim}, 'COSINE')")
-            self.graph.query(f"CALL db.idx.vector.add('Domain', 'embedding', {self.vector_dim}, 'COSINE')")
+            self.graph.query(
+                f"CALL db.idx.vector.add('Entity', 'embedding', "
+                f"{self.vector_dim}, 'COSINE')"
+            )
+            self.graph.query(
+                f"CALL db.idx.vector.add('Concept', 'embedding', "
+                f"{self.vector_dim}, 'COSINE')"
+            )
+            self.graph.query(
+                f"CALL db.idx.vector.add('Domain', 'embedding', "
+                f"{self.vector_dim}, 'COSINE')"
+            )
         except Exception as e:
             # Indices might already exist
             logger.debug("Vector Index initialization (might already exist): %s", e)
@@ -54,11 +70,8 @@ class WorldModel:
 
     def clear_database(self):
         """Clears the entire graph."""
-        try:
+        with contextlib.suppress(Exception):
             self.graph.delete()
-        except Exception:
-            # If graph doesn't exist, ignore
-            pass
         self._ensure_graph()
 
     def _get_embedding(self, text: str) -> list[float]:
@@ -72,17 +85,24 @@ class WorldModel:
             # Create or update individual using Tier 1 schema
             query = "MERGE (n:ContentNode:Entity {id: $id}) "
 
-            set_clauses = ["n.name = $name", "n.content = $name", "n.embedding = vecf32($embedding)"]
+            set_clauses = [
+                "n.name = $name",
+                "n.content = $name",
+                "n.embedding = vecf32($embedding)",
+            ]
             params = {
                 "id": individual.id,
                 "name": individual.name,
-                "embedding": self._get_embedding(individual.name)
+                "embedding": self._get_embedding(individual.name),
             }
 
             if individual.properties:
                 for prop in individual.properties:
-                    # Sanitize property name for the query string since labels/property keys can't be parameterized directly
-                    prop_sanitized = "".join(c for c in prop if c.isalnum() or c == "_")
+                    # Sanitize property name for the query string since
+                    # labels/property keys can't be parameterized directly
+                    prop_sanitized = "".join(
+                        c for c in prop if c.isalnum() or c == "_"
+                    )
                     set_clauses.append(f"n.prop_{prop_sanitized} = true")
 
             query += "SET " + ", ".join(set_clauses)
@@ -92,7 +112,11 @@ class WorldModel:
             # relation: <e, <e, t>>
             source = relation.source_id
             target = relation.target_id
-            rel_type = "".join(c for c in relation.relation_type.upper().replace(" ", "_") if c.isalnum() or c == "_")
+            rel_type = "".join(
+                c
+                for c in relation.relation_type.upper().replace(" ", "_")
+                if c.isalnum() or c == "_"
+            )
 
             query = f"""
             MATCH (a:ContentNode:Entity {{id: $source}})
@@ -109,14 +133,23 @@ class WorldModel:
         result = self.graph.query(cypher, params=params or {})
         return result.result_set
 
-    def semantic_search(self, query_text: str, top_k: int = 5, threshold: float = 2.0, label: str = None) -> list[dict]:
-        """Find nodes semantically similar to the query, optionally filtered by label."""
+    def semantic_search(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        threshold: float = 2.0,
+        label: str | None = None,
+    ) -> list[dict]:
+        """
+        Find nodes semantically similar to the query,
+        optionally filtered by label.
+        """
         try:
             query_vec = self._get_embedding(query_text)
-            
+
             # Construct label filter if provided
             label_clause = f":{label}" if label else ""
-            
+
             # FalkorDB vector search using vecf32 and vec.cosineDistance
             query = f"""
                 MATCH (n{label_clause})
@@ -127,24 +160,18 @@ class WorldModel:
                 ORDER BY distance ASC
                 LIMIT $top_k
             """
-            params = {
-                "query_vec": query_vec,
-                "threshold": threshold,
-                "top_k": top_k
-            }
+            params = {"query_vec": query_vec, "threshold": threshold, "top_k": top_k}
             result = self.graph.query(query, params=params)
-            
+
             scored_nodes = []
             for row in result.result_set:
-                scored_nodes.append({
-                    "id": row[0],
-                    "content": row[1],
-                    "distance": row[2]
-                })
+                scored_nodes.append(
+                    {"id": row[0], "content": row[1], "distance": row[2]}
+                )
             return scored_nodes
-            
+
         except Exception as e:
-            logger.error(f"Semantic search failed: {e}")
+            logger.error("Semantic search failed: %s", e)
             return []
 
     # ==========================================
@@ -159,22 +186,22 @@ class WorldModel:
             RETURN n.id
             """
         params = {
-            "node_id": individual['id'],
-            "name": individual['name'],
-            "embedding": self._get_embedding(individual['name'])
+            "node_id": individual["id"],
+            "name": individual["name"],
+            "embedding": self._get_embedding(individual["name"]),
         }
-        logger.debug(f"DEBUG: create_content_node Cypher: {query}")
-        logger.debug(f"DEBUG: create_content_node Params: {params}")
+        logger.debug("DEBUG: create_content_node Cypher: %s", query)
+        logger.debug("DEBUG: create_content_node Params: %s", params)
         self.graph.query(query, params=params)
 
     def create_structure_note(self, concept_name: str, describes_entities: list[str]):
         """Tier 2: Organizes Content Nodes."""
         # Create Concept Node
-        query = "MERGE (c:StructureNote:Concept {name: $name}) SET c.embedding = vecf32($embedding)"
-        params = {
-            "name": concept_name,
-            "embedding": self._get_embedding(concept_name)
-        }
+        query = (
+            "MERGE (c:StructureNote:Concept {name: $name}) "
+            "SET c.embedding = vecf32($embedding)"
+        )
+        params = {"name": concept_name, "embedding": self._get_embedding(concept_name)}
         self.graph.query(query, params=params)
 
         # Link Content Nodes to this Structure Note
@@ -184,20 +211,20 @@ class WorldModel:
             MATCH (c:StructureNote {name: $concept_name})
             MERGE (e)-[:INSTANCE_OF]->(c)
             """
-            self.graph.query(link_query, params={
-                "entity_id": entity_id,
-                "concept_name": concept_name
-            })
+            self.graph.query(
+                link_query,
+                params={"entity_id": entity_id, "concept_name": concept_name},
+            )
 
     def create_main_structure_note(
         self, domain_name: str, encompasses_concepts: list[str]
     ):
         """Tier 3: Organizes Structure Notes into Domains."""
-        query = "MERGE (d:MainStructureNote:Domain {name: $name}) SET d.embedding = vecf32($embedding)"
-        params = {
-            "name": domain_name,
-            "embedding": self._get_embedding(domain_name)
-        }
+        query = (
+            "MERGE (d:MainStructureNote:Domain {name: $name}) "
+            "SET d.embedding = vecf32($embedding)"
+        )
+        params = {"name": domain_name, "embedding": self._get_embedding(domain_name)}
         self.graph.query(query, params=params)
 
         for concept in encompasses_concepts:
@@ -206,8 +233,6 @@ class WorldModel:
             MATCH (d:MainStructureNote {name: $domain_name})
             MERGE (c)-[:BELONGS_TO_DOMAIN]->(d)
             """
-            self.graph.query(link_query, params={
-                "concept": concept,
-                "domain_name": domain_name
-            })
-
+            self.graph.query(
+                link_query, params={"concept": concept, "domain_name": domain_name}
+            )

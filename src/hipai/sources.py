@@ -43,12 +43,14 @@ class WebScraperSource(BaseSource):
     async def get_texts(self) -> AsyncGenerator[str]:
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(self.url) as response:
-                    response.raise_for_status()
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
-                    text = soup.get_text(separator=' ', strip=True)
-                    yield text
+            async with (
+                aiohttp.ClientSession(headers=headers) as session,
+                session.get(self.url) as response,
+            ):
+                response.raise_for_status()
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                text = soup.get_text(separator=' ', strip=True)
+                yield text
         except Exception as e:
             print(f"Failed to fetch {self.url}: {e}")

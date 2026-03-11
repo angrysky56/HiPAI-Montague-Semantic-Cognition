@@ -13,18 +13,20 @@
 """
 Synthesizer Module
 """
+
 import logging
-from typing import List, Dict, Optional
+
+from .world_model import WorldModel
+
 try:
-    from sklearn.cluster import KMeans
     import numpy as np
+    from sklearn.cluster import KMeans
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
 
 logger = logging.getLogger(__name__)
-
-from .world_model import WorldModel
 
 
 class ZettelkastenSynthesizer:
@@ -34,12 +36,13 @@ class ZettelkastenSynthesizer:
     Implements intensional logic evaluation by allowing worlds (graph states) to be
     evaluated over time.
     """
+
     def __init__(self, world_model: WorldModel):
         self.world_model = world_model
 
-    def synthesize_concepts(self, property_threshold: int = 1) -> List[str]:
+    def synthesize_concepts(self, property_threshold: int = 1) -> list[str]:
         """
-        Generates Structure Notes based on common properties among 
+        Generates Structure Notes based on common properties among
         Content Nodes (Entities).
         If entities share a property, a Concept is generated in the graph.
         Returns a list of created concept names.
@@ -49,14 +52,15 @@ class ZettelkastenSynthesizer:
 
         try:
             result = self.world_model.query_graph(query_keys)
-        except Exception:
-            return [] # In case the graph doesn't exist
+        except Exception as e:
+            logger.error("Failed to query graph: %s", e)
+            return []  # In case the graph doesn't exist
 
         all_props = set()
         for row in result:
             keys = row[0]
             for key in keys:
-                if key.startswith('prop_'):
+                if key.startswith("prop_"):
                     prop_name = key[5:]
                     all_props.add(prop_name)
 
@@ -75,9 +79,9 @@ class ZettelkastenSynthesizer:
 
         return created_concepts
 
-    def vector_synthesize_concepts(self, n_clusters: int = 2) -> List[str]:
+    def vector_synthesize_concepts(self, n_clusters: int = 2) -> list[str]:
         """
-        Tier 2+: Uses machine learning (KMeans) to cluster Entities purely by 
+        Tier 2+: Uses machine learning (KMeans) to cluster Entities purely by
         their vector embeddings, suggesting latent category Structure Notes.
         """
         if not HAS_SKLEARN:
@@ -110,20 +114,24 @@ class ZettelkastenSynthesizer:
 
         return created_concepts
 
-    def synthesize_domains(self, concept_threshold: int = 2) -> List[str]:
+    def synthesize_domains(self, concept_threshold: int = 2) -> list[str]:
         """
         Generates Main Structure Notes (Domains) by clustering related Concepts.
         For simplicity, this clusters concepts that share underlying entities.
+        Uses concept_threshold to filter connections.
         """
-        # Find concepts that share at least one entity
+        # Find concepts that share at least concept_threshold entities
         q = """
         MATCH (c1:Concept)<-[:INSTANCE_OF]-(e:Entity)-[:INSTANCE_OF]->(c2:Concept)
         WHERE id(c1) < id(c2)
+        WITH c1, c2, count(e) as shared_entities
+        WHERE shared_entities >= $threshold
         RETURN c1.name, c2.name
         """
         try:
-            res = self.world_model.query_graph(q)
-        except Exception:
+            res = self.world_model.query_graph(q, {"threshold": concept_threshold})
+        except Exception as e:
+            logger.error("Failed to query graph for domains: %s", e)
             return []
 
         domains_created = []
@@ -136,12 +144,14 @@ class ZettelkastenSynthesizer:
 
         return domains_created
 
+
 class HIPAIManager:
     """
     High-level manager for the Montague-style semantic cognition system.
     Orchestrates the WorldModel and ZettelkastenSynthesizer.
     This class provides the interface expected by test_hipai.py.
     """
+
     def __init__(self, graph_name: str = "hipai_world"):
         self.world_model = WorldModel(graph_name=graph_name)
         self.synthesizer = ZettelkastenSynthesizer(self.world_model)
@@ -150,79 +160,103 @@ class HIPAIManager:
         """Standardizer for clearing the model's graph database."""
         self.world_model.clear_database()
 
-    def add_belief(self, text: str) -> Dict:
+    def add_belief(self, text: str) -> dict:
         """
         Parses a natural language belief into the system.
         Since we don't have an LLM connected in this basic version,
         we use basic string parsing to create Observations.
         """
         from .models import Individual, Observation
-        
+
         text = text.strip(".")
-        
+
         # Super basic parser for "X is a Y"
         if " is a " in text:
             subject, obj = text.split(" is a ", 1)
             obs = Observation(
                 text_source=text,
                 individuals=[Individual(id=subject, name=subject, properties=[obj])],
-                relations=[]
+                relations=[],
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added belief: {text}"}
-            
+
         # Basic parser for "X is Y"
         if " is " in text:
             subject, obj = text.split(" is ", 1)
             obs = Observation(
                 text_source=text,
                 individuals=[Individual(id=subject, name=subject, properties=[obj])],
-                relations=[]
+                relations=[],
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added belief: {text}"}
-            
+
         # Basic parser for "All Xs are Ys"
         if text.startswith("All ") and " are " in text:
             parts = text[4:].split(" are ")
             if len(parts) == 2:
                 subject_class = parts[0]
                 obj_property = parts[1]
-                # Logically, this creates a rule. 
-                # For this basic implementation, we just store it as a Concept-level property.
-                self.world_model.create_structure_note(f"Concept_{subject_class.capitalize()}", [])
+                # Logically, this creates a rule.
+                # For this basic implementation, we just store it as a
+                # Concept-level property.
+                self.world_model.create_structure_note(
+                    f"Concept_{subject_class.capitalize()}", []
+                )
                 # Apply the property to the concept
-                q = f"MATCH (c:Concept {{name: 'Concept_{subject_class.capitalize()}'}}) SET c.prop_{obj_property} = true"
+                q = (
+                    f"MATCH (c:Concept {{name: "
+                    f"'Concept_{subject_class.capitalize()}'}}) "
+                    f"SET c.prop_{obj_property} = true"
+                )
                 self.world_model.query_graph(q)
-                return {"status": "success", "message": f"Added universal belief: {text}"}
+                return {
+                    "status": "success",
+                    "message": f"Added universal belief: {text}",
+                }
 
-        return {"status": "error", "message": "Failed to parse belief. Use 'X is Y' or 'All X are Y' format."}
+        return {
+            "status": "error",
+            "message": "Failed to parse belief. Use 'X is Y' or 'All X are Y' format.",
+        }
 
-    def get_current_state(self) -> Dict:
+    def get_current_state(self) -> dict:
         """Returns a snapshot of the current state of the World Model."""
         try:
             # Get all nodes
-            res = self.world_model.query_graph("MATCH (n) RETURN labels(n)[0] as label, properties(n) as props")
+            res = self.world_model.query_graph(
+                "MATCH (n) RETURN labels(n)[0] as label, properties(n) as props"
+            )
             nodes = [{"label": r[0], "properties": dict(r[1])} for r in res]
-            
+
             # Get all edges
-            res_edges = self.world_model.query_graph("MATCH (a)-[r]->(b) RETURN properties(a).id as source, type(r) as type, properties(b).id as target")
-            edges = [{"source": r[0], "type": r[1], "target": r[2]} for r in res_edges if r[0] and r[2]]
-            
+            res_edges = self.world_model.query_graph(
+                "MATCH (a)-[r]->(b) RETURN properties(a).id as source, "
+                "type(r) as type, properties(b).id as target"
+            )
+            edges = [
+                {"source": r[0], "type": r[1], "target": r[2]}
+                for r in res_edges
+                if r[0] and r[2]
+            ]
+
             return {"nodes": nodes, "edges": edges}
         except Exception as e:
             return {"error": str(e)}
 
-    def evaluate_hypothesis(self, hypothesis: str) -> Dict:
+    def evaluate_hypothesis(self, hypothesis: str) -> dict:
         """
         Evaluates a hypothesis such as 'Socrates is mortal'.
         """
         hypothesis = hypothesis.strip(".")
         if " is " in hypothesis:
             subject, obj = hypothesis.split(" is ", 1)
-            
+
             # Check if this property exists directly on the entity
-            q_direct = f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{obj} = true RETURN n"
+            q_direct = (
+                f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{obj} = true RETURN n"
+            )
             try:
                 res = self.world_model.query_graph(q_direct, {"subject": subject})
                 if len(res) > 0:
@@ -230,11 +264,13 @@ class HIPAIManager:
                         "hypothesis": hypothesis,
                         "entailment": "True",
                         "confidence": 1.0,
-                        "reasoning": f"Found direct evidence that {subject} has property {obj}."
+                        "reasoning": (
+                            f"Found direct evidence that {subject} has property {obj}."
+                        ),
                     }
-            except Exception:
-                pass
-                
+            except Exception as e:
+                logger.debug("Direct property check failed: %s", e)
+
             # Check if entity belongs to a Concept that has this property (syllogism)
             # Find classes Socrates belongs to
             q_concept = f"""
@@ -250,17 +286,20 @@ class HIPAIManager:
                         "hypothesis": hypothesis,
                         "entailment": "True",
                         "confidence": 1.0,
-                        "reasoning": f"{subject} is an instance of {concept}, which has property {obj}."
+                        "reasoning": (
+                            f"{subject} is an instance of {concept}, "
+                            f"which has property {obj}."
+                        ),
                     }
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Concept syllogism check failed: %s", e)
 
             # Maybe Zettelkasten Synthesis needs to run?
             # E.g., if we know Socrates is a man, and we know All men are mortal,
             # we can synthesize a Concept_man if we parse it right.
             # In our simple parser, "man" is a property.
-            
-            # Check if entity has some property 'prop_X' 
+
+            # Check if entity has some property 'prop_X'
             # and there exists a Concept_X with property 'prop_Y'
             try:
                 # Find properties of the entity
@@ -274,27 +313,38 @@ class HIPAIManager:
                             concept_variants = [
                                 f"Concept_{prop_name.capitalize()}",
                                 f"Concept_{prop_name}",
-                                f"Concept_{prop_name}s", # Simple pluralization
-                                f"Concept_{prop_name}es", # Simple pluralization
-                                f"Concept_{prop_name[:-2].capitalize()}en" if prop_name.lower().endswith('man') else None # man -> men
+                                f"Concept_{prop_name}s",  # Simple pluralization
+                                f"Concept_{prop_name}es",  # Simple pluralization
+                                (
+                                    f"Concept_{prop_name[:-2].capitalize()}en"
+                                    if prop_name.lower().endswith("man")
+                                    else None
+                                ),  # man -> men
                             ]
                             for cv in filter(None, concept_variants):
-                                q_inf = f"MATCH (c:Concept {{name: '{cv}'}}) WHERE c.prop_{obj} = true RETURN c.name"
+                                q_inf = (
+                                    f"MATCH (c:Concept {{name: '{cv}'}}) "
+                                    f"WHERE c.prop_{obj} = true RETURN c.name"
+                                )
                                 res_inf = self.world_model.query_graph(q_inf)
                                 if res_inf:
                                     return {
                                         "hypothesis": hypothesis,
                                         "entailment": "True",
                                         "confidence": 1.0,
-                                        "reasoning": f"{subject} is a {prop_name}, and all {cv.replace('Concept_', '')} are {obj}."
+                                        "reasoning": (
+                                            f"{subject} is a {prop_name}, and all "
+                                            f"{cv.replace('Concept_', '')} are {obj}."
+                                        ),
                                     }
             except (ValueError, KeyError, TypeError) as e:
-                print(f"Error extracting knowledge: {e}")
-                pass
-                
+                logger.error("Error extracting knowledge: %s", e)
+
         return {
             "hypothesis": hypothesis,
-            "entailment": "Unknown", 
+            "entailment": "Unknown",
             "confidence": 0.0,
-            "reasoning": "Could not find evidence in the knowledge graph to prove or disprove."
+            "reasoning": (
+                "Could not find evidence in the knowledge graph to prove or disprove."
+            ),
         }
