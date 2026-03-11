@@ -67,9 +67,11 @@ def test_integration():
         hi_pai.add_belief("All men are mortal")
 
         # Trigger synthesis (in a real system this might be automatic or scheduled)
-        # For our test, synthesize_concepts will create Concept_Man if property threshold is met
+        # For our test, synthesize_concepts will create Concept_Man
+        # if property threshold is met
         # hi_pai.synthesizer.synthesize_concepts(property_threshold=1)
-        # Note: add_belief for "All men are mortal" already creates Concept_Men and sets prop_mortal
+        # Note: add_belief for "All men are mortal" already creates
+        # Concept_Men and sets prop_mortal
 
         # Evaluate hypothesis
         hyp_res = hi_pai.evaluate_hypothesis("Socrates is mortal")

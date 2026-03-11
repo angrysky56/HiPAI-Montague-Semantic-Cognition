@@ -26,6 +26,7 @@ from hipai.models import Observation
 @dataclass
 class SemanticType:
     """Base class for all semantic types."""
+
     name: str
 
     def __str__(self):
@@ -40,6 +41,7 @@ class SemanticType:
 @dataclass
 class ComplexType(SemanticType):
     """Represents a complex semantic type, composed of a domain and codomain."""
+
     domain: SemanticType
     codomain: SemanticType
 
@@ -53,20 +55,22 @@ class ComplexType(SemanticType):
             return False
         return self.domain == other.domain and self.codomain == other.codomain
 
+
 # Base Types
-TYPE_E = SemanticType("e") # Entity
-TYPE_T = SemanticType("t") # Truth value
-TYPE_S = SemanticType("s") # World/State
+TYPE_E = SemanticType("e")  # Entity
+TYPE_T = SemanticType("t")  # Truth value
+TYPE_S = SemanticType("s")  # World/State
 
 
 @dataclass
 class LambdaExpression:
     """A semantic expression with a specific type and evaluated function."""
+
     expr_type: SemanticType
     func: Callable[[Any], Any]
     repr_str: str
 
-    def apply(self, arg: 'LambdaExpression') -> 'LambdaExpression':
+    def apply(self, arg: "LambdaExpression") -> "LambdaExpression":
         """Applies this lambda expression to another expression as an argument."""
         func_type = self.expr_type
         if not isinstance(func_type, ComplexType):
@@ -79,9 +83,7 @@ class LambdaExpression:
         codomain = func_type.codomain
 
         if domain != arg.expr_type:
-            raise TypeError(
-                f"Type mismatch: expected {domain}, got {arg.expr_type}"
-            )
+            raise TypeError(f"Type mismatch: expected {domain}, got {arg.expr_type}")
 
         # Apply the function
         result_val = self.func(arg.func)
@@ -89,11 +91,12 @@ class LambdaExpression:
             expr_type=codomain,
             # Handle both functional and non-functional returns
             func=result_val if callable(result_val) else lambda x=None: result_val,
-            repr_str=f"({self.repr_str}({arg.repr_str}))"
+            repr_str=f"({self.repr_str}({arg.repr_str}))",
         )
 
     def __str__(self):
         return f"{self.repr_str} : {self.expr_type}"
+
 
 def lift(entity: LambdaExpression) -> LambdaExpression:
     """
@@ -108,11 +111,13 @@ def lift(entity: LambdaExpression) -> LambdaExpression:
     return LambdaExpression(
         expr_type=gq_type,
         func=lambda p_func: p_func(entity.func),
-        repr_str=f"λP.P({entity.repr_str})"
+        repr_str=f"λP.P({entity.repr_str})",
     )
+
 
 class SemanticEngine:
     """Engine for composing semantic expressions based on their types."""
+
     def compose_forward(
         self, func_expr: LambdaExpression, arg_expr: LambdaExpression
     ) -> LambdaExpression:
@@ -133,17 +138,11 @@ class SemanticEngine:
         type2 = expr2.expr_type
 
         # Try forward: expr1(expr2)
-        if (
-            isinstance(type1, ComplexType)
-            and type1.domain == type2
-        ):
+        if isinstance(type1, ComplexType) and type1.domain == type2:
             return self.compose_forward(expr1, expr2)
 
         # Try backward: expr2(expr1)
-        if (
-            isinstance(type2, ComplexType)
-            and type2.domain == type1
-        ):
+        if isinstance(type2, ComplexType) and type2.domain == type1:
             return self.compose_backward(expr1, expr2)
 
         raise TypeError(f"Cannot compose {type1} and {type2}")
@@ -160,9 +159,7 @@ class SemanticEngine:
         # Compile individuals to type e
         for ind in observation.individuals:
             ind_expr = LambdaExpression(
-                expr_type=TYPE_E,
-                func=lambda x, name=ind.name: name,
-                repr_str=ind.name
+                expr_type=TYPE_E, func=lambda x, name=ind.name: name, repr_str=ind.name
             )
             ind_map[ind.id] = ind_expr
 
@@ -175,7 +172,7 @@ class SemanticEngine:
             rel_expr = LambdaExpression(
                 expr_type=rel_type,
                 func=lambda y: lambda x: True,
-                repr_str=f"λy.λx.{rel.relation_type}(x, y)"
+                repr_str=f"λy.λx.{rel.relation_type}(x, y)",
             )
 
             subj_expr = ind_map.get(rel.source_id)

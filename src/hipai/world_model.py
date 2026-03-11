@@ -80,33 +80,67 @@ class WorldModel:
     def incorporate_observation(self, obs: Observation):
         r"""
         Maps the $\lambda$-abstraction semantic structures into Graph nodes and edges.
+        Includes Epistemological tracking (semantic origins) and Contradiction detection.
         """
+        obs_query = """
+        MERGE (o:EpistemicNode:Observation {event_id: $event_id})
+        SET o.text_source = $text_source,
+            o.timestamp = $timestamp
+        """
+        import datetime
+        self.graph.query(obs_query, params={
+            "event_id": obs.event_id,
+            "text_source": obs.text_source,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+
         for individual in obs.individuals:
             # Create or update individual using Tier 1 schema
-            query = "MERGE (n:ContentNode:Entity {id: $id}) "
-
-            set_clauses = [
-                "n.name = $name",
-                "n.content = $name",
-                "n.embedding = vecf32($embedding)",
-            ]
+            # Link EpistemicNode -> Entity
+            query = """
+            MATCH (o:EpistemicNode:Observation {event_id: $event_id})
+            MERGE (n:ContentNode:Entity {id: $id})
+            MERGE (o)-[:OBSERVED]->(n)
+            SET n.name = $name,
+                n.content = $name,
+                n.embedding = vecf32($embedding)
+            """
             params = {
                 "id": individual.id,
                 "name": individual.name,
                 "embedding": self._get_embedding(individual.name),
+                "event_id": obs.event_id
             }
+            self.graph.query(query, params=params)
 
+            # Handle property assignments and contradictions
             if individual.properties:
                 for prop in individual.properties:
-                    # Sanitize property name for the query string since
-                    # labels/property keys can't be parameterized directly
-                    prop_sanitized = "".join(
-                        c for c in prop if c.isalnum() or c == "_"
-                    )
-                    set_clauses.append(f"n.prop_{prop_sanitized} = true")
-
-            query += "SET " + ", ".join(set_clauses)
-            self.graph.query(query, params=params)
+                    prop_sanitized = "".join(c for c in prop if c.isalnum() or c == "_")
+                    is_negation = prop_sanitized.startswith("not_")
+                    base_prop = prop_sanitized[4:] if is_negation else prop_sanitized
+                    
+                    # Query existing state of the positive and negative properties
+                    check_q = f"MATCH (n:Entity {{id: $id}}) RETURN n.prop_{base_prop}, n.prop_not_{base_prop}"
+                    res = self.graph.query(check_q, params={"id": individual.id})
+                    
+                    contested = False
+                    if res.result_set:
+                        row = res.result_set[0]
+                        has_pos = row[0] is True
+                        has_neg = row[1] is True
+                        if (is_negation and has_pos) or (not is_negation and has_neg):
+                            contested = True
+                    
+                    # Update property and contested status
+                    update_q = f"""
+                    MATCH (n:Entity {{id: $id}})
+                    SET n.prop_{prop_sanitized} = true
+                    """
+                    if contested:
+                        update_q += ", n.epistemically_contested = true"
+                    
+                    self.graph.query(update_q, params={"id": individual.id})
 
         for relation in obs.relations:
             # relation: <e, <e, t>>
@@ -118,13 +152,20 @@ class WorldModel:
                 if c.isalnum() or c == "_"
             )
 
+            # Track relations and semantic origin
             query = f"""
             MATCH (a:ContentNode:Entity {{id: $source}})
             MATCH (b:ContentNode:Entity {{id: $target}})
             MERGE (a)-[r:{rel_type}]->(b)
+            SET r.truth_value = COALESCE(r.truth_value, 1),
+                r.epistemic_state = 'asserted',
+                r.event_id = $event_id
             """
-
-            self.graph.query(query, params={"source": source, "target": target})
+            self.graph.query(query, params={
+                "source": source, 
+                "target": target, 
+                "event_id": obs.event_id
+            })
 
     def query_graph(self, cypher: str, params: dict | None = None) -> list[dict]:
         """

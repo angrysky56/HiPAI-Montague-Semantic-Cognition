@@ -170,6 +170,17 @@ class HIPAIManager:
 
         text = text.strip(".")
 
+        # Basic parser for "X is not a Y"
+        if " is not a " in text:
+            subject, obj = text.split(" is not a ", 1)
+            obs = Observation(
+                text_source=text,
+                individuals=[Individual(id=subject, name=subject, properties=[f"not_{obj}"])],
+                relations=[],
+            )
+            self.world_model.incorporate_observation(obs)
+            return {"status": "success", "message": f"Added negative belief: {text}"}
+
         # Super basic parser for "X is a Y"
         if " is a " in text:
             subject, obj = text.split(" is a ", 1)
@@ -180,6 +191,17 @@ class HIPAIManager:
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added belief: {text}"}
+
+        # Basic parser for "X is not Y"
+        if " is not " in text:
+            subject, obj = text.split(" is not ", 1)
+            obs = Observation(
+                text_source=text,
+                individuals=[Individual(id=subject, name=subject, properties=[f"not_{obj}"])],
+                relations=[],
+            )
+            self.world_model.incorporate_observation(obs)
+            return {"status": "success", "message": f"Added negative belief: {text}"}
 
         # Basic parser for "X is Y"
         if " is " in text:
@@ -250,63 +272,108 @@ class HIPAIManager:
         Evaluates a hypothesis such as 'Socrates is mortal'.
         """
         hypothesis = hypothesis.strip(".")
-        if " is " in hypothesis:
+        is_negation = False
+        
+        if " is not " in hypothesis:
+            subject, obj = hypothesis.split(" is not ", 1)
+            is_negation = True
+        elif " is " in hypothesis:
             subject, obj = hypothesis.split(" is ", 1)
+        else:
+            return {
+                "hypothesis": hypothesis,
+                "entailment": "Unknown",
+                "confidence": 0.0,
+                "reasoning": "Could not parse hypothesis. Use 'X is Y' or 'X is not Y'."
+            }
 
-            # Check if this property exists directly on the entity
-            q_direct = (
-                f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{obj} = true RETURN n"
-            )
-            try:
-                res = self.world_model.query_graph(q_direct, {"subject": subject})
-                if len(res) > 0:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "True",
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"Found direct evidence that {subject} has property {obj}."
-                        ),
-                    }
-            except Exception as e:
-                logger.debug("Direct property check failed: %s", e)
+        prop_to_check = f"not_{obj}" if is_negation else obj
 
-            # Check if entity belongs to a Concept that has this property (syllogism)
-            # Find classes Socrates belongs to
-            q_concept = f"""
-            MATCH (e:Entity {{id: $subject}})-[:INSTANCE_OF]->(c:Concept)
-            WHERE c.prop_{obj} = true
-            RETURN c.name
-            """
-            try:
-                res2 = self.world_model.query_graph(q_concept, {"subject": subject})
-                if len(res2) > 0:
-                    concept = res2[0][0]
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "True",
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"{subject} is an instance of {concept}, "
-                            f"which has property {obj}."
-                        ),
-                    }
-            except Exception as e:
-                logger.debug("Concept syllogism check failed: %s", e)
+        # Verify if the entity has a contradiction on this property
+        base_obj_clean = "".join(c for c in obj if c.isalnum() or c == "_")
+        q_contested = f"MATCH (n:Entity {{id: $subject}}) RETURN n.epistemically_contested"
+        res_c = self.world_model.query_graph(q_contested, {"subject": subject})
+        if res_c and res_c[0][0] is True:
+            return {
+                "hypothesis": hypothesis,
+                "entailment": "Contested",
+                "confidence": 0.5,
+                "reasoning": f"The properties for {subject} are epistemically contested."
+            }
 
-            # Maybe Zettelkasten Synthesis needs to run?
-            # E.g., if we know Socrates is a man, and we know All men are mortal,
-            # we can synthesize a Concept_man if we parse it right.
-            # In our simple parser, "man" is a property.
+        # Check if this property exists directly on the entity
+        prop_sanitized = "".join(c for c in prop_to_check if c.isalnum() or c == "_")
+        q_direct = (
+            f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{prop_sanitized} = true RETURN n"
+        )
+        try:
+            res = self.world_model.query_graph(q_direct, {"subject": subject})
+            if len(res) > 0:
+                # If checking "Socrates is not mortal", and we find prop_not_mortal is true
+                return {
+                    "hypothesis": hypothesis,
+                    "entailment": "True",
+                    "confidence": 1.0,
+                    "reasoning": (
+                        f"Found direct evidence that {subject} is{' not ' if is_negation else ' '}{obj}."
+                    ),
+                }
+            
+            # Additional check: what if the OPPOSITE is explicitly true?
+            opposite_prop = obj if is_negation else f"not_{obj}"
+            opp_sanitized = "".join(c for c in opposite_prop if c.isalnum() or c == "_")
+            q_opp = f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{opp_sanitized} = true RETURN n"
+            res_opp = self.world_model.query_graph(q_opp, {"subject": subject})
+            if len(res_opp) > 0:
+                return {
+                    "hypothesis": hypothesis,
+                    "entailment": "False",
+                    "confidence": 1.0,
+                    "reasoning": (
+                        f"Found direct evidence contradicting the hypothesis."
+                    ),
+                }
+        except Exception as e:
+            logger.debug("Direct property check failed: %s", e)
 
-            # Check if entity has some property 'prop_X'
-            # and there exists a Concept_X with property 'prop_Y'
-            try:
-                # Find properties of the entity
-                q_props = "MATCH (e:Entity {id: $subject}) RETURN keys(e)"
-                res_props = self.world_model.query_graph(q_props, {"subject": subject})
-                if res_props:
-                    for key in res_props[0][0]:
+        # Check if entity belongs to a Concept that has this property (syllogism)
+        # Find classes Socrates belongs to
+        q_concept = f"""
+        MATCH (e:Entity {{id: $subject}})-[:INSTANCE_OF]->(c:Concept)
+        WHERE c.prop_{obj} = true
+        RETURN c.name
+        """
+        try:
+            res2 = self.world_model.query_graph(q_concept, {"subject": subject})
+            if res2 and len(res2) > 0:
+                concept = res2[0][0]
+                return {
+                    "hypothesis": hypothesis,
+                    "entailment": "True",
+                    "confidence": 1.0,
+                    "reasoning": (
+                        f"{subject} is an instance of {concept}, "
+                        f"which has property {obj}."
+                    ),
+                }
+        except Exception as e:
+            logger.debug("Concept syllogism check failed: %s", e)
+
+        # Maybe Zettelkasten Synthesis needs to run?
+        # E.g., if we know Socrates is a man, and we know All men are mortal,
+        # we can synthesize a Concept_man if we parse it right.
+        # In our simple parser, "man" is a property.
+
+        # Check if entity has some property 'prop_X'
+        # and there exists a Concept_X with property 'prop_Y'
+        try:
+            # Find properties of the entity
+            q_props = "MATCH (e:Entity {id: $subject}) RETURN keys(e)"
+            res_props = self.world_model.query_graph(q_props, {"subject": subject})
+            if res_props and len(res_props) > 0 and len(res_props[0]) > 0:
+                keys = res_props[0][0]  # Get the array of keys
+                if keys:
+                    for key in keys:
                         if key.startswith("prop_"):
                             prop_name = key[5:]
                             # Try matching Concept with capitalized name and variations
@@ -327,7 +394,7 @@ class HIPAIManager:
                                     f"WHERE c.prop_{obj} = true RETURN c.name"
                                 )
                                 res_inf = self.world_model.query_graph(q_inf)
-                                if res_inf:
+                                if res_inf and len(res_inf) > 0:
                                     return {
                                         "hypothesis": hypothesis,
                                         "entailment": "True",
@@ -337,8 +404,8 @@ class HIPAIManager:
                                             f"{cv.replace('Concept_', '')} are {obj}."
                                         ),
                                     }
-            except (ValueError, KeyError, TypeError) as e:
-                logger.error("Error extracting knowledge: %s", e)
+        except Exception as e:
+            logger.error("Error extracting knowledge: %s", e)
 
         return {
             "hypothesis": hypothesis,

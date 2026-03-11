@@ -11,6 +11,7 @@ def mock_falkordb():
     with patch("hipai.world_model.FalkorDB") as mock:
         yield mock
 
+
 def test_incorporate_observation(mock_falkordb):
     # Setup mock
     mock_db = MagicMock()
@@ -19,7 +20,7 @@ def test_incorporate_observation(mock_falkordb):
     mock_falkordb.return_value = mock_db
 
     world_model = WorldModel()
-    
+
     # reset mock because WorldModel.__init__ calls `_ensure_graph` which makes queries
     mock_graph.reset_mock()
 
@@ -27,17 +28,16 @@ def test_incorporate_observation(mock_falkordb):
         text_source="Dog is an animal",
         individuals=[
             Individual(id="e1", name="Dog", properties=["Furry"]),
-            Individual(id="e2", name="Animal")
+            Individual(id="e2", name="Animal"),
         ],
-        relations=[
-            Relation(source_id="e1", target_id="e2", relation_type="IS_A")
-        ]
+        relations=[Relation(source_id="e1", target_id="e2", relation_type="IS_A")],
     )
 
     world_model.incorporate_observation(obs)
 
-    # Check that graph.query was called 3 times: 2 for entities, 1 for relation
-    assert mock_graph.query.call_count == 3
+    # Check that graph.query was called 6 times:
+    # 1 base for Observation, 3 for e1 (merge + prop check + prop set), 1 for e2, 1 for relation
+    assert mock_graph.query.call_count == 6
 
 
 def test_query_graph(mock_falkordb):
@@ -53,7 +53,7 @@ def test_query_graph(mock_falkordb):
 
     world_model = WorldModel()
     mock_graph.reset_mock()
-    
+
     result = world_model.query_graph("MATCH (n) RETURN n")
 
     assert result == [{"name": "Dog"}]
