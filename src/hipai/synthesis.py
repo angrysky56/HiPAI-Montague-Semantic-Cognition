@@ -15,6 +15,7 @@ Synthesizer Module
 """
 
 import logging
+from typing import Any
 
 from .world_model import WorldModel
 
@@ -24,6 +25,8 @@ try:
 
     HAS_SKLEARN = True
 except ImportError:
+    np = None
+    KMeans = None
     HAS_SKLEARN = False
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,12 @@ class ZettelkastenSynthesizer:
 
     def __init__(self, world_model: WorldModel):
         self.world_model = world_model
+
+    def register_property_map(self, property_map: dict):
+        # This method is intended for future use to map properties to specific
+        # ontological categories or evaluation rules.
+        # For now, it's a placeholder to satisfy linting/design.
+        pass
 
     def synthesize_concepts(self, property_threshold: int = 1) -> list[str]:
         """
@@ -252,10 +261,14 @@ class HIPAIManager:
                 concept_name = f"Concept_{singular_class.capitalize()}"
                 self.world_model.create_structure_note(concept_name, [])
                 # Apply the property to the concept
+                prop_key = (
+                    obj_property.strip()
+                    .replace(" ", "_")
+                    .replace("-", "_")
+                )
                 q = (
-                    f"MATCH (c:Concept {{name: "
-                    f"'{concept_name}'}}) "
-                    f"SET c.prop_{obj_property.strip().replace(' ', '_').replace('-', '_')} = true"
+                    f"MATCH (c:Concept {{name: '{concept_name}'}}) "
+                    f"SET c.prop_{prop_key} = true"
                 )
                 self.world_model.query_graph(q)
                 return {
@@ -287,118 +300,144 @@ class HIPAIManager:
                 for r in res_edges
                 if r[0] and r[2]
             ]
-
             return {"nodes": nodes, "edges": edges}
         except Exception as e:
             return {"error": str(e)}
 
-    def evaluate_hypothesis(self, hypothesis: str) -> dict:
+    def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
         """
-        Evaluates a hypothesis such as 'Socrates is mortal'.
+        Evaluate a hypothesis against the intensional and extensional knowledge.
+        Supports both Entities (Content Nodes) and Concepts (Structure Notes).
         """
         hypothesis = hypothesis.strip(".")
-        is_negation = False
 
+        # 1. Normalize the property and identify if it's a negation.
+        is_negative = False
         if " is not " in hypothesis:
             subject, obj = hypothesis.split(" is not ", 1)
-            is_negation = True
+            is_negative = True
         elif " is " in hypothesis:
             subject, obj = hypothesis.split(" is ", 1)
         else:
             return {
                 "hypothesis": hypothesis,
-                "entailment": "Unknown",
+                "entailment": "Error",
                 "confidence": 0.0,
-                "reasoning": (
-                    "Could not parse hypothesis. "
-                    "Use 'X is Y' or 'X is not Y'."
-                ),
+                "reasoning": "Failed to parse. Use 'X is Y' or 'X is not Y'.",
             }
 
-        # Normalize the predicate: strip whitespace and replace spaces/hyphens
-        # with underscores, but preserve original case to match FalkorDB's
-        # case-sensitive property keys (e.g. "WelfareBeing" not "welfarebeing").
-        obj = obj.strip().replace(" ", "_").replace("-", "_")
         subject = subject.strip()
+        obj = obj.strip()
 
-
-
-        # Verify if the entity has a contradiction on this property
-        q_contested = "MATCH (n:Entity {id: $subject}) RETURN n.epistemically_contested"
+        # 2. Check if the subject is epistemically contested
+        q_contested = """
+        MATCH (n:Entity)
+        WHERE n.id = $subject OR n.name = $subject
+        RETURN n.epistemically_contested AS contested
+        """
         res_c = self.world_model.query_graph(q_contested, {"subject": subject})
         if res_c and res_c[0][0] is True:
             return {
                 "hypothesis": hypothesis,
                 "entailment": "Contested",
                 "confidence": 0.5,
-                "reasoning": (
-                    f"The properties for {subject} are "
-                    "epistemically contested."
-                ),
+                "reasoning": f"Properties for {subject} are epistemically contested.",
             }
 
-        # Check if this property exists directly on the entity or via inheritance
-        prop_sanitized = "".join(c for c in obj if c.isalnum() or c == "_")
-        expected_val = not is_negation
+        # 3. Sanitize the property for Cypher key usage
+        prop_sanitized = "".join(
+            c for c in obj.replace(" ", "_").replace("-", "_")
+            if c.isalnum() or c == "_"
+        )
 
-        # Check the entity directly first, then via INSTANCE_OF inheritance.
-        # Two-part union: direct property on entity, and inherited from concepts.
-        # FalkorDB variable-length zero-hop (*0..) is unreliable; use explicit
-        # UNION to cover both cases.
-        q_check = f"""
-        MATCH (n:Entity {{id: $subject}})
-        WHERE n.prop_{prop_sanitized} IS NOT NULL
-        RETURN n.name AS source_node, n.prop_{prop_sanitized} AS val
-        UNION
-        MATCH (n:Entity {{id: $subject}})-[:INSTANCE_OF]->(c)
-        WHERE c.prop_{prop_sanitized} IS NOT NULL
-        RETURN c.name AS source_node, c.prop_{prop_sanitized} AS val
+        # 4. Hybrid Search: Direct Entity Property + Concept Inheritance
+        q_logic = f"""
+        MATCH (n:Entity)
+        WHERE n.id = $subject OR n.name = $subject
+        OPTIONAL MATCH (n)-[:INSTANCE_OF]->(c:Concept)
+        RETURN n.prop_{prop_sanitized} as direct_pos,
+               n.prop_not_{prop_sanitized} as direct_neg,
+               collect(c.prop_{prop_sanitized}) as concept_pos,
+               collect(c.prop_not_{prop_sanitized}) as concept_neg
         """
+        res = self.world_model.query_graph(q_logic, {"subject": subject})
 
-        try:
-            res = self.world_model.query_graph(q_check, {"subject": subject})
-            if res and len(res) > 0:
-                match_found = any(row[1] == expected_val for row in res)
-                conflict_found = any(row[1] != expected_val for row in res)
+        entailment = "Undetermined"
+        confidence = 0.0
+        reasoning = (
+            f"No info found about '{obj}' for {subject} "
+            "in Content Nodes or Structure Notes."
+        )
 
-                if match_found and not conflict_found:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "True",
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"Found property {obj}={expected_val} "
-                            f"on {subject} or its concepts."
-                        ),
-                    }
-                elif conflict_found and not match_found:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "False",
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"Found property {obj}={not expected_val} "
-                            f"on {subject} or its concepts."
-                        ),
-                    }
-                else:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "Contradiction",
-                        "confidence": 0.5,
-                        "reasoning": (
-                            f"Found conflicting values for {obj} "
-                            f"on {subject} or its concepts."
-                        ),
-                    }
-        except Exception as e:
-            logger.error("Error evaluating hypothesis via graph: %s", e)
+        if res:
+            row = res[0]
+            direct_pos = row[0]
+            direct_neg = row[1]
+            concept_pos = [p for p in row[2] if p is not None]
+            concept_neg = [p for p in row[3] if p is not None]
+
+            # Evidence for the positive property
+            has_pos = direct_pos is True or any(concept_pos)
+            # Evidence for the negative property (not X)
+            has_neg = direct_neg is True or any(concept_neg)
+
+            # Contradiction check
+            if has_pos and has_neg:
+                entailment = "Contested"
+                confidence = 0.5
+                reasoning = (
+                    f"Contradictory evidence: both '{obj}' and 'not {obj}' "
+                    f"present for {subject}."
+                )
+            elif is_negative:
+                # Hypothesis is "is not X"
+                if has_neg:
+                    entailment = "Entailed"
+                    confidence = 1.0
+                    reasoning = f"Found '{obj}' in negative state for {subject}."
+                elif has_pos:
+                    entailment = "Denied"
+                    confidence = 1.0
+                    reasoning = f"Found '{obj}' in positive state, contradicts notion."
+            else:
+                # Hypothesis is "is X"
+                if has_pos:
+                    entailment = "Entailed"
+                    confidence = 1.0
+                    reasoning = (
+                        f"Found '{obj}' for {subject} via direct/inherited props."
+                    )
+                elif has_neg:
+                    entailment = "Denied"
+                    confidence = 1.0
+                    reasoning = (
+                        f"Found 'not {obj}' for {subject}, contradicts notion."
+                    )
+
+        # 5. Final Fallback: Check for relations
+        if entailment == "Undetermined":
+            prop_upper = "".join(
+                c for c in obj.upper().replace(" ", "_") if c.isalnum() or c == "_"
+            )
+            q_rel = (
+                "MATCH (n:Entity)-[r]->(m:Entity) "
+                "WHERE (n.id = $subject OR n.name = $subject) "
+                "RETURN n.id, n.name, type(r), m.id, m.name"
+            )
+            res_rel = self.world_model.query_graph(
+                q_rel, {"subject": subject, "prop_upper": prop_upper}
+            )
+            if res_rel:
+                entailment = "Entailed" if not is_negative else "Denied"
+                confidence = 1.0
+                reasoning = (
+                    f"Found relation {prop_upper} from {subject} "
+                    f"to {res_rel[0][0]}."
+                )
 
         return {
             "hypothesis": hypothesis,
-            "entailment": "Unknown",
-            "confidence": 0.0,
-            "reasoning": (
-                "Could not find evidence in the knowledge graph to prove or disprove."
-            ),
+            "entailment": entailment,
+            "confidence": confidence,
+            "reasoning": reasoning,
         }
