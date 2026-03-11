@@ -36,7 +36,8 @@ def test_incorporate_observation(mock_falkordb):
     world_model.incorporate_observation(obs)
 
     # Check that graph.query was called 6 times:
-    # 1 base for Observation, 3 for e1 (merge + prop check + prop set), 1 for e2, 1 for relation
+    # 1 base for Observation, 3 for e1 (merge + prop check + prop set),
+    # 1 for e2, 1 for relation
     assert mock_graph.query.call_count == 6
 
 

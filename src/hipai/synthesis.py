@@ -192,6 +192,22 @@ class HIPAIManager:
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
+
+            import inflect
+
+            p = inflect.engine()
+            singular_class = p.singular_noun(obj) or obj
+            concept_name = f"Concept_{singular_class.capitalize()}"
+
+            cypher = """
+            MATCH (e:Entity {id: $subject})
+            MERGE (c:Concept {name: $concept_name})
+            MERGE (e)-[:INSTANCE_OF]->(c)
+            """
+            self.world_model.query_graph(
+                cypher, {"subject": subject, "concept_name": concept_name}
+            )
+
             return {"status": "success", "message": f"Added belief: {text}"}
 
         # Basic parser for "X is not Y"
@@ -293,14 +309,17 @@ class HIPAIManager:
                 "hypothesis": hypothesis,
                 "entailment": "Unknown",
                 "confidence": 0.0,
-                "reasoning": "Could not parse hypothesis. Use 'X is Y' or 'X is not Y'.",
+                "reasoning": (
+                    "Could not parse hypothesis. "
+                    "Use 'X is Y' or 'X is not Y'."
+                ),
             }
 
         # Normalize the predicate to match how properties are stored
         obj = obj.strip().lower().replace(" ", "_")
         subject = subject.strip()
 
-        prop_to_check = f"not_{obj}" if is_negation else obj
+
 
         # Verify if the entity has a contradiction on this property
         q_contested = "MATCH (n:Entity {id: $subject}) RETURN n.epistemically_contested"
@@ -310,129 +329,60 @@ class HIPAIManager:
                 "hypothesis": hypothesis,
                 "entailment": "Contested",
                 "confidence": 0.5,
-                "reasoning": f"The properties for {subject} are epistemically contested.",
+                "reasoning": (
+                    f"The properties for {subject} are "
+                    "epistemically contested."
+                ),
             }
 
-        # Check if this property exists directly on the entity
-        prop_sanitized = "".join(c for c in prop_to_check if c.isalnum() or c == "_")
-        q_direct = f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{prop_sanitized} = true RETURN n"
-        try:
-            res = self.world_model.query_graph(q_direct, {"subject": subject})
-            if len(res) > 0:
-                # If checking "Socrates is not mortal", and we find prop_not_mortal is true
-                return {
-                    "hypothesis": hypothesis,
-                    "entailment": "True",
-                    "confidence": 1.0,
-                    "reasoning": (
-                        f"Found direct evidence that {subject} is{' not ' if is_negation else ' '}{obj}."
-                    ),
-                }
+        # Check if this property exists directly on the entity or via inheritance
+        prop_sanitized = "".join(c for c in obj if c.isalnum() or c == "_")
+        expected_val = not is_negation
 
-            # Additional check: what if the OPPOSITE is explicitly true?
-            opposite_prop = obj if is_negation else f"not_{obj}"
-            opp_sanitized = "".join(c for c in opposite_prop if c.isalnum() or c == "_")
-            q_opp = f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{opp_sanitized} = true RETURN n"
-            res_opp = self.world_model.query_graph(q_opp, {"subject": subject})
-            if len(res_opp) > 0:
-                return {
-                    "hypothesis": hypothesis,
-                    "entailment": "False",
-                    "confidence": 1.0,
-                    "reasoning": (
-                        "Found direct evidence contradicting the hypothesis."
-                    ),
-                }
-        except Exception as e:
-            logger.debug("Direct property check failed: %s", e)
-
-        # Check if entity belongs to a Concept that has this property (syllogism)
-        # Find classes Socrates belongs to
-        q_concept = f"""
-        MATCH (e:Entity {{id: $subject}})-[:INSTANCE_OF]->(c:Concept)
-        WHERE c.prop_{prop_sanitized} = true
-        RETURN c.name
+        q_check = f"""
+        MATCH (n:Entity {{id: $subject}})-[:INSTANCE_OF*0..]->(c)
+        WHERE c.prop_{prop_sanitized} IS NOT NULL
+        RETURN c.name as source_node, c.prop_{prop_sanitized} as val
         """
+
         try:
-            res2 = self.world_model.query_graph(q_concept, {"subject": subject})
-            if res2 and len(res2) > 0:
-                concept = res2[0][0]
-                return {
-                    "hypothesis": hypothesis,
-                    "entailment": "True",
-                    "confidence": 1.0,
-                    "reasoning": (
-                        f"{subject} is an instance of {concept}, "
-                        f"which has property {prop_to_check}."
-                    ),
-                }
+            res = self.world_model.query_graph(q_check, {"subject": subject})
+            if res and len(res) > 0:
+                match_found = any(row[1] == expected_val for row in res)
+                conflict_found = any(row[1] != expected_val for row in res)
+
+                if match_found and not conflict_found:
+                    return {
+                        "hypothesis": hypothesis,
+                        "entailment": "True",
+                        "confidence": 1.0,
+                        "reasoning": (
+                            f"Found property {obj}={expected_val} "
+                            f"on {subject} or its concepts."
+                        ),
+                    }
+                elif conflict_found and not match_found:
+                    return {
+                        "hypothesis": hypothesis,
+                        "entailment": "False",
+                        "confidence": 1.0,
+                        "reasoning": (
+                            f"Found property {obj}={not expected_val} "
+                            f"on {subject} or its concepts."
+                        ),
+                    }
+                else:
+                    return {
+                        "hypothesis": hypothesis,
+                        "entailment": "Contradiction",
+                        "confidence": 0.5,
+                        "reasoning": (
+                            f"Found conflicting values for {obj} "
+                            f"on {subject} or its concepts."
+                        ),
+                    }
         except Exception as e:
-            logger.debug("Concept syllogism check failed: %s", e)
-
-        # Maybe Zettelkasten Synthesis needs to run?
-        # E.g., if we know Socrates is a man, and we know All men are mortal,
-        # we can synthesize a Concept_man if we parse it right.
-        # In our simple parser, "man" is a property.
-
-        # Check if entity has some property 'prop_X'
-        # and there exists a Concept_X with property 'prop_Y'
-        try:
-            # Find properties of the entity
-            q_props = "MATCH (e:Entity {id: $subject}) RETURN keys(e)"
-            res_props = self.world_model.query_graph(q_props, {"subject": subject})
-            if res_props and len(res_props) > 0 and len(res_props[0]) > 0:
-                keys = res_props[0][0]  # Get the array of keys
-                if keys:
-                    for key in keys:
-                        if key.startswith("prop_"):
-                            prop_name = key[5:]
-                            # Try matching Concept with capitalized name and variations
-                            import inflect
-
-                            p = inflect.engine()
-                            plural = p.plural(prop_name)
-                            singular = p.singular_noun(prop_name)
-
-                            concept_variants = [
-                                f"Concept_{prop_name.capitalize()}",
-                                f"Concept_{prop_name}",
-                            ]
-
-                            if plural:
-                                concept_variants.extend(
-                                    [
-                                        f"Concept_{plural.capitalize()}",
-                                        f"Concept_{plural}",
-                                    ]
-                                )
-
-                            if singular:
-                                concept_variants.extend(
-                                    [
-                                        f"Concept_{singular.capitalize()}",
-                                        f"Concept_{singular}",
-                                    ]
-                                )
-                            for cv in filter(None, concept_variants):
-                                q_inf = (
-                                    f"MATCH (c:Concept {{name: '{cv}'}}) "
-                                    f"WHERE c.prop_{prop_sanitized} = true "
-                                    f"RETURN c.name"
-                                )
-                                res_inf = self.world_model.query_graph(q_inf)
-                                if res_inf and len(res_inf) > 0:
-                                    return {
-                                        "hypothesis": hypothesis,
-                                        "entailment": "True",
-                                        "confidence": 1.0,
-                                        "reasoning": (
-                                            f"{subject} is a {prop_name}, "
-                                            f"and all {cv.replace('Concept_', '')} "
-                                            f"are {prop_to_check}."
-                                        ),
-                                    }
-        except Exception as e:
-            logger.error("Error extracting knowledge: %s", e)
+            logger.error("Error evaluating hypothesis via graph: %s", e)
 
         return {
             "hypothesis": hypothesis,

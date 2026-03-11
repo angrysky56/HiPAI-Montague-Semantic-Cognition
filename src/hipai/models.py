@@ -24,11 +24,11 @@ class Individual(BaseModel):
     name: str = Field(
         ..., description="Human-readable name or concept for the individual."
     )
-    properties: list[str] = Field(
+    properties: list[str] | dict[str, Any] = Field(
         default_factory=list,
         description=(
-            "List of properties (type <e, t>) this individual possesses, "
-            "e.g., 'Human', 'Mortal'."
+            "List or dictionary of properties this individual possesses. "
+            "e.g., ['Human'] or {'age': 30}."
         ),
     )
 

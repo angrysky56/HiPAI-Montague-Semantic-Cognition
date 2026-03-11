@@ -1,4 +1,3 @@
-import asyncio
 from falkordb import FalkorDB
 
 db = FalkorDB(host='localhost', port=6380)
