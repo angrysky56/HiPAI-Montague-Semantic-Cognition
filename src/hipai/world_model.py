@@ -226,7 +226,7 @@ class WorldModel:
             result = self.graph.query(query, params=params)
 
             scored_nodes = []
-            for row in result:
+            for row in result.result_set:
                 scored_nodes.append(
                     {"id": row[0], "content": row[1], "distance": row[2]}
                 )
