@@ -175,7 +175,9 @@ class HIPAIManager:
             subject, obj = text.split(" is not a ", 1)
             obs = Observation(
                 text_source=text,
-                individuals=[Individual(id=subject, name=subject, properties=[f"not_{obj}"])],
+                individuals=[
+                    Individual(id=subject, name=subject, properties=[f"not_{obj}"])
+                ],
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
@@ -197,7 +199,9 @@ class HIPAIManager:
             subject, obj = text.split(" is not ", 1)
             obs = Observation(
                 text_source=text,
-                individuals=[Individual(id=subject, name=subject, properties=[f"not_{obj}"])],
+                individuals=[
+                    Individual(id=subject, name=subject, properties=[f"not_{obj}"])
+                ],
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
@@ -220,16 +224,21 @@ class HIPAIManager:
             if len(parts) == 2:
                 subject_class = parts[0]
                 obj_property = parts[1]
+
+                import inflect
+
+                p = inflect.engine()
+                singular_class = p.singular_noun(subject_class) or subject_class
+
                 # Logically, this creates a rule.
                 # For this basic implementation, we just store it as a
                 # Concept-level property.
-                self.world_model.create_structure_note(
-                    f"Concept_{subject_class.capitalize()}", []
-                )
+                concept_name = f"Concept_{singular_class.capitalize()}"
+                self.world_model.create_structure_note(concept_name, [])
                 # Apply the property to the concept
                 q = (
                     f"MATCH (c:Concept {{name: "
-                    f"'Concept_{subject_class.capitalize()}'}}) "
+                    f"'{concept_name}'}}) "
                     f"SET c.prop_{obj_property} = true"
                 )
                 self.world_model.query_graph(q)
@@ -273,7 +282,7 @@ class HIPAIManager:
         """
         hypothesis = hypothesis.strip(".")
         is_negation = False
-        
+
         if " is not " in hypothesis:
             subject, obj = hypothesis.split(" is not ", 1)
             is_negation = True
@@ -284,28 +293,25 @@ class HIPAIManager:
                 "hypothesis": hypothesis,
                 "entailment": "Unknown",
                 "confidence": 0.0,
-                "reasoning": "Could not parse hypothesis. Use 'X is Y' or 'X is not Y'."
+                "reasoning": "Could not parse hypothesis. Use 'X is Y' or 'X is not Y'.",
             }
 
         prop_to_check = f"not_{obj}" if is_negation else obj
 
         # Verify if the entity has a contradiction on this property
-        base_obj_clean = "".join(c for c in obj if c.isalnum() or c == "_")
-        q_contested = f"MATCH (n:Entity {{id: $subject}}) RETURN n.epistemically_contested"
+        q_contested = "MATCH (n:Entity {id: $subject}) RETURN n.epistemically_contested"
         res_c = self.world_model.query_graph(q_contested, {"subject": subject})
         if res_c and res_c[0][0] is True:
             return {
                 "hypothesis": hypothesis,
                 "entailment": "Contested",
                 "confidence": 0.5,
-                "reasoning": f"The properties for {subject} are epistemically contested."
+                "reasoning": f"The properties for {subject} are epistemically contested.",
             }
 
         # Check if this property exists directly on the entity
         prop_sanitized = "".join(c for c in prop_to_check if c.isalnum() or c == "_")
-        q_direct = (
-            f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{prop_sanitized} = true RETURN n"
-        )
+        q_direct = f"MATCH (n:Entity {{id: $subject}}) WHERE n.prop_{prop_sanitized} = true RETURN n"
         try:
             res = self.world_model.query_graph(q_direct, {"subject": subject})
             if len(res) > 0:
@@ -318,7 +324,7 @@ class HIPAIManager:
                         f"Found direct evidence that {subject} is{' not ' if is_negation else ' '}{obj}."
                     ),
                 }
-            
+
             # Additional check: what if the OPPOSITE is explicitly true?
             opposite_prop = obj if is_negation else f"not_{obj}"
             opp_sanitized = "".join(c for c in opposite_prop if c.isalnum() or c == "_")
@@ -330,7 +336,7 @@ class HIPAIManager:
                     "entailment": "False",
                     "confidence": 1.0,
                     "reasoning": (
-                        f"Found direct evidence contradicting the hypothesis."
+                        "Found direct evidence contradicting the hypothesis."
                     ),
                 }
         except Exception as e:
@@ -377,17 +383,32 @@ class HIPAIManager:
                         if key.startswith("prop_"):
                             prop_name = key[5:]
                             # Try matching Concept with capitalized name and variations
+                            import inflect
+
+                            p = inflect.engine()
+                            plural = p.plural(prop_name)
+                            singular = p.singular_noun(prop_name)
+
                             concept_variants = [
                                 f"Concept_{prop_name.capitalize()}",
                                 f"Concept_{prop_name}",
-                                f"Concept_{prop_name}s",  # Simple pluralization
-                                f"Concept_{prop_name}es",  # Simple pluralization
-                                (
-                                    f"Concept_{prop_name[:-2].capitalize()}en"
-                                    if prop_name.lower().endswith("man")
-                                    else None
-                                ),  # man -> men
                             ]
+
+                            if plural:
+                                concept_variants.extend(
+                                    [
+                                        f"Concept_{plural.capitalize()}",
+                                        f"Concept_{plural}",
+                                    ]
+                                )
+
+                            if singular:
+                                concept_variants.extend(
+                                    [
+                                        f"Concept_{singular.capitalize()}",
+                                        f"Concept_{singular}",
+                                    ]
+                                )
                             for cv in filter(None, concept_variants):
                                 q_inf = (
                                     f"MATCH (c:Concept {{name: '{cv}'}}) "
