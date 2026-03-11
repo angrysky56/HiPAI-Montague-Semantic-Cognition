@@ -296,6 +296,10 @@ class HIPAIManager:
                 "reasoning": "Could not parse hypothesis. Use 'X is Y' or 'X is not Y'.",
             }
 
+        # Normalize the predicate to match how properties are stored
+        obj = obj.strip().lower().replace(" ", "_")
+        subject = subject.strip()
+
         prop_to_check = f"not_{obj}" if is_negation else obj
 
         # Verify if the entity has a contradiction on this property
@@ -346,7 +350,7 @@ class HIPAIManager:
         # Find classes Socrates belongs to
         q_concept = f"""
         MATCH (e:Entity {{id: $subject}})-[:INSTANCE_OF]->(c:Concept)
-        WHERE c.prop_{obj} = true
+        WHERE c.prop_{prop_sanitized} = true
         RETURN c.name
         """
         try:
@@ -359,7 +363,7 @@ class HIPAIManager:
                     "confidence": 1.0,
                     "reasoning": (
                         f"{subject} is an instance of {concept}, "
-                        f"which has property {obj}."
+                        f"which has property {prop_to_check}."
                     ),
                 }
         except Exception as e:
@@ -412,7 +416,8 @@ class HIPAIManager:
                             for cv in filter(None, concept_variants):
                                 q_inf = (
                                     f"MATCH (c:Concept {{name: '{cv}'}}) "
-                                    f"WHERE c.prop_{obj} = true RETURN c.name"
+                                    f"WHERE c.prop_{prop_sanitized} = true "
+                                    f"RETURN c.name"
                                 )
                                 res_inf = self.world_model.query_graph(q_inf)
                                 if res_inf and len(res_inf) > 0:
@@ -421,8 +426,9 @@ class HIPAIManager:
                                         "entailment": "True",
                                         "confidence": 1.0,
                                         "reasoning": (
-                                            f"{subject} is a {prop_name}, and all "
-                                            f"{cv.replace('Concept_', '')} are {obj}."
+                                            f"{subject} is a {prop_name}, "
+                                            f"and all {cv.replace('Concept_', '')} "
+                                            f"are {prop_to_check}."
                                         ),
                                     }
         except Exception as e:
