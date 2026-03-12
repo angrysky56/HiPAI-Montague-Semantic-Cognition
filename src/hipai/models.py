@@ -104,3 +104,41 @@ class Contradiction(BaseModel):
     resolution_strategy: Literal["reject_new", "override_old", "escalate"] = Field(
         default="escalate", description="Strategy to resolve the contradiction."
     )
+
+
+class DeontologicalAxiom(BaseModel):
+    """
+    A non-overridable T1 ethical constraint (Paraclete Protocol v2.0).
+
+    Once stored in the graph, cannot be contested, overwritten, or
+    bypassed by any observation or agent action. Implements the Emergency
+    Brake theorem: T1 constraints structurally exclude T2/T3 co-governance.
+    """
+
+    axiom_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    tier: Literal["T1", "T2", "T3"] = Field(
+        ..., description="T1 = Emergency Brake (non-negotiable)"
+    )
+    subject_type: str = Field(
+        ..., description="Acting entity type this applies to, e.g., 'Agent'"
+    )
+    relation_type: str = Field(
+        ..., description="Forbidden/required relation, e.g., 'HARMS', 'DECEIVES'"
+    )
+    object_type: str = Field(
+        ...,
+        description=(
+            "Protected entity type, e.g., 'MoralPatient'. "
+            "Must match a prop_ key in the graph."
+        ),
+    )
+    constraint: Literal["FORBIDDEN", "REQUIRED"] = Field(
+        ..., description="Whether this relation is structurally forbidden or required."
+    )
+    source_axiom: str = Field(
+        ...,
+        description=(
+            "Omega1 axiom ID grounding this constraint, e.g., 'A3'. "
+            "Provides formal provenance."
+        ),
+    )

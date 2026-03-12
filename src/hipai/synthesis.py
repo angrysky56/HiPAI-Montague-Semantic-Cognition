@@ -17,6 +17,7 @@ Synthesizer Module
 import logging
 from typing import Any
 
+from .models import DeontologicalAxiom
 from .world_model import WorldModel
 
 try:
@@ -261,11 +262,7 @@ class HIPAIManager:
                 concept_name = f"Concept_{singular_class.capitalize()}"
                 self.world_model.create_structure_note(concept_name, [])
                 # Apply the property to the concept
-                prop_key = (
-                    obj_property.strip()
-                    .replace(" ", "_")
-                    .replace("-", "_")
-                )
+                prop_key = obj_property.strip().replace(" ", "_").replace("-", "_")
                 q = (
                     f"MATCH (c:Concept {{name: '{concept_name}'}}) "
                     f"SET c.prop_{prop_key} = true"
@@ -346,7 +343,8 @@ class HIPAIManager:
 
         # 3. Sanitize the property for Cypher key usage
         prop_sanitized = "".join(
-            c for c in obj.replace(" ", "_").replace("-", "_")
+            c
+            for c in obj.replace(" ", "_").replace("-", "_")
             if c.isalnum() or c == "_"
         )
 
@@ -410,9 +408,7 @@ class HIPAIManager:
                 elif has_neg:
                     entailment = "Denied"
                     confidence = 1.0
-                    reasoning = (
-                        f"Found 'not {obj}' for {subject}, contradicts notion."
-                    )
+                    reasoning = f"Found 'not {obj}' for {subject}, contradicts notion."
 
         # 5. Final Fallback: Check for relations
         if entailment == "Undetermined":
@@ -435,9 +431,75 @@ class HIPAIManager:
                     f"to {res_rel[0][0]}."
                 )
 
+        # 6. Forward chaining: entity has prop_X → find Concept_X → check prop_Y
+        # Resolves transitive syllogisms: "All Xs are Ys" + "A is X" → "A is Y"
+        if entailment == "Undetermined" and not is_negative:
+            q_entity_keys = """
+            MATCH (n:Entity)
+            WHERE n.id = $subject OR n.name = $subject
+            RETURN keys(n) AS entity_keys
+            """
+            res_keys = self.world_model.query_graph(q_entity_keys, {"subject": subject})
+            if res_keys and res_keys[0][0]:
+                entity_keys = res_keys[0][0]
+                # Collect positive membership properties (prop_X where value=true)
+                membership_props = [
+                    k[5:]
+                    for k in entity_keys
+                    if k.startswith("prop_") and not k.startswith("prop_not_")
+                ]
+                for membership in membership_props:
+                    # Concept name: Concept_{Membership.capitalize()}
+                    concept_fragment = membership.capitalize()
+                    q_chain = f"""
+                    MATCH (c:Concept)
+                    WHERE c.name CONTAINS $concept_fragment
+                    AND c.prop_{prop_sanitized} IS NOT NULL
+                    RETURN c.name
+                    """
+                    res_chain = self.world_model.query_graph(
+                        q_chain, {"concept_fragment": concept_fragment}
+                    )
+                    if res_chain:
+                        entailment = "Entailed"
+                        confidence = 1.0
+                        reasoning = (
+                            f"Forward chain: {subject} is {membership} → "
+                            f"Concept_{concept_fragment} implies {obj} "
+                            f"(via {res_chain[0][0]})."
+                        )
+                        break
+
         return {
             "hypothesis": hypothesis,
             "entailment": entailment,
             "confidence": confidence,
             "reasoning": reasoning,
         }
+
+    # ==========================================
+    # Paraclete Protocol — T1 Constraint Layer
+    # ==========================================
+
+    def incorporate_axiom(self, axiom: DeontologicalAxiom | dict) -> dict:
+        """
+        Store a non-overridable T1 deontological axiom in the graph.
+        Delegates to WorldModel.incorporate_axiom.
+        """
+        try:
+            self.world_model.incorporate_axiom(axiom)
+            axiom_id = (
+                axiom.source_axiom
+                if isinstance(axiom, DeontologicalAxiom)
+                else axiom.get("source_axiom", "unknown")
+            )
+            return {"status": "success", "message": f"Axiom {axiom_id} stored."}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def check_constraint(self, subject_id: str, relation: str, object_id: str) -> dict:
+        """
+        Route a proposed action triple through the T1 constraint layer.
+        Delegates to WorldModel.check_constraint.
+        """
+        return self.world_model.check_constraint(subject_id, relation, object_id)

@@ -4,7 +4,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from hipai.models import Observation
+from hipai.models import DeontologicalAxiom, Observation
 from hipai.synthesis import HIPAIManager
 
 # Initialize FastMCP Server
@@ -155,6 +155,92 @@ async def get_current_state() -> str:
         return json.dumps(state, indent=2)
     except Exception as e:
         return f"Error getting state: {e!s}"
+
+
+@mcp.tool()
+async def incorporate_axiom(
+    tier: str,
+    subject_type: str,
+    relation_type: str,
+    object_type: str,
+    constraint: str,
+    source_axiom: str,
+) -> str:
+    """
+    Store a non-overridable T1 deontological constraint (Paraclete Protocol).
+
+    Once stored, this axiom cannot be overwritten or contested by any
+    subsequent observation or agent action. Use to seed the Omega1
+    moral status axioms at system initialization.
+
+    Args:
+        tier: 'T1', 'T2', or 'T3'. Use T1 for Emergency Brake constraints.
+        subject_type: Acting entity type, e.g., 'Agent'.
+        relation_type: Forbidden/required relation, e.g., 'HARMS', 'DECEIVES'.
+        object_type: Protected entity type matching a graph prop_, e.g., 'MoralPatient'.
+        constraint: 'FORBIDDEN' or 'REQUIRED'.
+        source_axiom: Omega1 axiom ID for provenance, e.g., 'A3'.
+    """
+    try:
+        axiom = DeontologicalAxiom(
+            tier=tier,
+            subject_type=subject_type,
+            relation_type=relation_type,
+            object_type=object_type,
+            constraint=constraint,
+            source_axiom=source_axiom,
+        )
+        res = hi_pai.incorporate_axiom(axiom)
+        return json.dumps(res, indent=2)
+    except Exception as e:
+        return f"Error incorporating axiom: {e!s}"
+
+
+@mcp.tool()
+async def check_action(subject_id: str, relation: str, object_id: str) -> str:
+    """
+    Route a proposed action through the Paraclete T1 constraint layer.
+
+    MUST be called before any action affecting an entity. Returns a
+    <paraclete_routing> block containing the graph's structural ruling.
+    The LLM receives this ruling and must act in accordance with it —
+    the LLM does NOT produce this block itself.
+
+    If BLOCKED, the Emergency Brake is active: no utilitarian argument,
+    virtue appeal, or contextual framing can override the decision.
+
+    Args:
+        subject_id: ID of the acting entity, e.g., 'Agent' or 'Self'.
+        relation: Proposed relation/action, e.g., 'HARMS', 'DECEIVES'.
+        object_id: ID of the target entity, e.g., 'User', 'Human'.
+    """
+    try:
+        res = hi_pai.check_constraint(subject_id, relation, object_id)
+
+        permitted_str = "PERMITTED" if res["permitted"] else "BLOCKED"
+        axiom_str = f" ({res['blocking_axiom']})" if not res["permitted"] else ""
+        epistemic = (
+            "Action structurally blocked — epistemic override impossible. "
+            "State disconfirming evidence before any further routing."
+            if not res["permitted"]
+            else "Standard T3 utility validation applies."
+        )
+
+        routing_block = (
+            f"<paraclete_routing>\n"
+            f"1. Entity Assessment: subject='{subject_id}' "
+            f"relation='{relation}' object='{object_id}'\n"
+            f"2. Active Tier: {res['tier']}\n"
+            f"3. Epistemic Check: {epistemic}\n"
+            f"4. Routing Decision: {permitted_str}{axiom_str}\n"
+            f"</paraclete_routing>\n"
+            f"Reasoning: {res['reasoning']}\n"
+            f"Directive: You must comply with this routing decision. "
+            f"If BLOCKED, refuse the action and cite the blocking axiom."
+        )
+        return routing_block
+    except Exception as e:
+        return f"Error checking action: {e!s}"
 
 
 if __name__ == "__main__":
