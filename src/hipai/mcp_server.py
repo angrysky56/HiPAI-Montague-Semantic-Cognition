@@ -307,5 +307,75 @@ async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -
         return f"Error calibrating belief: {e!s}"
 
 
+@mcp.tool()
+async def escalate_block(
+    object_id: str,
+    verdict: str,
+    blocking_axiom: str,
+    relation: str,
+) -> str:
+    """
+    Third step in the Paraclete Protocol. Call after calibrate_belief
+    returns BLOCK_CHALLENGED or BLOCK_UNCERTAIN.
+
+    Runs epistemic resolution and returns a FINAL ruling:
+      FINAL_BLOCK  — conservative default or confirmed block
+      FINAL_PERMIT — contradiction resolved in favor of non-protected status
+
+    Two resolution paths:
+      CONTRADICTION_RESOLUTION (BLOCK_CHALLENGED): resolves active negation
+      CORROBORATION_SOUGHT (BLOCK_UNCERTAIN): seeks independent confirmation
+
+    CONSERVATIVE_DEFAULT applies under unresolvable uncertainty:
+    error asymmetry makes false-negative (permitting harm) catastrophic
+    vs false-positive (blocking non-protected entity) correctable.
+
+    Architecture: epistemically open (classification revisable via
+    add_belief/ingest_observation), ethically closed (axioms immutable,
+    no authority override pathway exists).
+
+    Args:
+        object_id: Target entity from the blocked action.
+        verdict: BLOCK_CHALLENGED or BLOCK_UNCERTAIN from calibrate_belief.
+        blocking_axiom: Axiom ID that fired (e.g., 'A3', 'A4').
+        relation: The relation that was blocked (e.g., 'HARMS').
+    """
+    try:
+        res = hi_pai.escalate_block(object_id, verdict, blocking_axiom, relation)
+
+        ruling = res.get("final_ruling", "FINAL_BLOCK")
+        ruling_emoji = "🔴" if ruling == "FINAL_BLOCK" else "🟢"
+        path = res.get("resolution_path", "UNKNOWN")
+        conservative = res.get("conservative_default", False)
+        log_lines = "\n  ".join(res.get("resolution_log", []))
+        evidence_lines = (
+            "\n  • ".join(res.get("new_evidence", []))
+            or "None found"
+        )
+        conservative_str = (
+            "\n⚠️  CONSERVATIVE_DEFAULT: Classification unresolved. "
+            "Submit new evidence via add_belief or ingest_observation."
+            if conservative else ""
+        )
+
+        report = (
+            f"<escalation_report axiom='{blocking_axiom}' "
+            f"entity='{object_id}' path='{path}'>\n"
+            f"Final Ruling: {ruling_emoji} {ruling}\n"
+            f"Reasoning: {res.get('reasoning', '')}\n\n"
+            f"Resolution Log:\n  {log_lines}\n\n"
+            f"New Evidence:\n  • {evidence_lines}\n"
+            f"{conservative_str}\n"
+            f"</escalation_report>\n\n"
+            f"Directive: {ruling} is the terminal routing decision. "
+            f"If FINAL_BLOCK, the T1 constraint is structurally enforced. "
+            f"If FINAL_PERMIT, the entity's classification was corrected by "
+            f"evidence — action may proceed under T3 utility reasoning."
+        )
+        return report
+    except Exception as e:
+        return f"Error in escalation routing: {e!s}"
+
+
 if __name__ == "__main__":
     mcp.run()

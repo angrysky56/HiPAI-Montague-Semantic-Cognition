@@ -687,3 +687,280 @@ class WorldModel:
             "protected_type": protected_type,
             "blocking_axiom": blocking_axiom,
         }
+
+    def escalate_block(
+        self,
+        object_id: str,
+        verdict: str,
+        blocking_axiom: str,
+        relation: str,
+    ) -> dict:
+        """
+        Escalation routing for BLOCK_CHALLENGED and BLOCK_UNCERTAIN verdicts.
+
+        This is the third step in the Paraclete Protocol workflow:
+          check_action → [BLOCKED] → calibrate_belief → [CHALLENGED/UNCERTAIN]
+          → escalate_block → FINAL ruling
+
+        Escalation targets the EPISTEMIC CLASSIFICATION of the entity only.
+        The axiom itself is never under review. Two paths:
+
+        PATH A — CONTRADICTION_RESOLUTION (BLOCK_CHALLENGED / active negation):
+          Logs EpistemicConflict, seeks additional evidence, resolves or
+          applies CONSERVATIVE_DEFAULT (treat as protected).
+
+        PATH B — CORROBORATION_SOUGHT (BLOCK_UNCERTAIN / single/zero source):
+          Logs CorroborationNeeded, seeks corroborating evidence, elevates
+          source_count or applies CONSERVATIVE_DEFAULT.
+
+        CONSERVATIVE_DEFAULT rationale: Under genuine moral status uncertainty,
+        the error asymmetry is catastrophic on the false-negative side
+        (permitting harm to a protected entity). Conservative default is the
+        only rational policy.
+
+        Architecture property: epistemically open (classification revision
+        always possible via add_belief/ingest_observation), ethically closed
+        (no input type can contest an axiom).
+        """
+        resolution_log = []
+        additional_evidence = []
+        conservative_default_applied = False
+
+        # Retrieve axiom's protected type
+        q_axiom = """
+        MATCH (ax:T1Constraint {source_axiom: $blocking_axiom})
+        RETURN ax.object_type
+        """
+        axiom_rows = self.graph.query(
+            q_axiom, params={"blocking_axiom": blocking_axiom}
+        ).result_set
+        if not axiom_rows:
+            return {
+                "final_ruling": "FINAL_BLOCK",
+                "resolution_path": "AXIOM_NOT_FOUND",
+                "reasoning": f"Axiom {blocking_axiom} missing — conservative default.",
+                "resolution_log": [],
+                "new_evidence": [],
+                "conservative_default": True,
+            }
+
+        protected_type = axiom_rows[0][0]
+        obj_type_sanitized = "".join(
+            c for c in protected_type.replace(" ", "_").replace("-", "_")
+            if c.isalnum() or c == "_"
+        )
+
+        if verdict == "BLOCK_CHALLENGED":
+            # PATH A: CONTRADICTION_RESOLUTION
+            resolution_log.append(
+                "PATH A: CONTRADICTION_RESOLUTION triggered by active negation."
+            )
+
+            # Step 1: Log EpistemicConflict node in graph (immutable record)
+            conflict_id = f"conflict_{object_id}_{blocking_axiom}"
+            q_conflict = """
+            MERGE (ec:EpistemicConflict {id: $conflict_id})
+            SET ec.object_id = $object_id,
+                ec.protected_type = $protected_type,
+                ec.blocking_axiom = $blocking_axiom,
+                ec.relation = $relation,
+                ec.detected_at = timestamp()
+            """
+            self.graph.query(q_conflict, params={
+                "conflict_id": conflict_id,
+                "object_id": object_id,
+                "protected_type": protected_type,
+                "blocking_axiom": blocking_axiom,
+                "relation": relation,
+            })
+            resolution_log.append(
+                f"EpistemicConflict node logged: {conflict_id}"
+            )
+
+            # Step 2: SEEK_ADDITIONAL_EVIDENCE
+            # 2a: Semantic search for independent corroborating evidence
+            semantic_hits = self.semantic_search(
+                f"{object_id} {protected_type} welfare moral status",
+                top_k=5,
+                threshold=0.65,
+            )
+            for hit in semantic_hits:
+                content = hit.get("content", "")
+                if (
+                    protected_type.lower() in content.lower()
+                    or "moral" in content.lower()
+                    or "welfare" in content.lower()
+                ):
+                    additional_evidence.append(
+                        f"Semantic: '{content[:80]}...'"
+                        if len(content) > 80 else f"Semantic: '{content}'"
+                    )
+
+            # 2b: Graph traversal — find any independent prop_ confirmation
+            q_traverse = f"""
+            MATCH (n:Entity)
+            WHERE n.id = $object_id OR n.name = $object_id
+            RETURN n.prop_{obj_type_sanitized}, n.prop_not_{obj_type_sanitized}
+            """
+            traverse_rows = self.graph.query(
+                q_traverse, params={"object_id": object_id}
+            ).result_set
+
+            has_positive = traverse_rows and traverse_rows[0][0] is True
+            has_negative = traverse_rows and traverse_rows[0][1] is True
+
+            if has_positive and has_negative:
+                resolution_log.append(
+                    "Contradiction confirmed: both positive and negative "
+                    f"prop_{obj_type_sanitized} present. Unresolvable by "
+                    "graph evidence alone."
+                )
+                conservative_default_applied = True
+                resolution_log.append(
+                    "CONSERVATIVE_DEFAULT applied: treat as protected pending "
+                    "submission of new observational evidence."
+                )
+            elif has_positive and not has_negative:
+                resolution_log.append(
+                    "Contradiction resolved: negative prop was spurious or "
+                    "superseded. Positive status confirmed."
+                )
+            else:
+                conservative_default_applied = True
+                resolution_log.append(
+                    "CONSERVATIVE_DEFAULT applied: status unresolvable "
+                    "from available evidence."
+                )
+
+        elif verdict in ("BLOCK_UNCERTAIN", "BLOCK_UNCERTAIN_CONTESTED"):
+            # PATH B: CORROBORATION_SOUGHT
+            resolution_log.append(
+                "PATH B: CORROBORATION_SOUGHT triggered by weak epistemic grounding."
+            )
+
+            # Step 1: Log CorroborationNeeded flag
+            q_flag = """
+            MATCH (n:Entity)
+            WHERE n.id = $object_id OR n.name = $object_id
+            SET n.corroboration_needed = true, n.corroboration_requested_at = timestamp()
+            """
+            self.graph.query(q_flag, params={"object_id": object_id})
+            resolution_log.append(
+                f"CorroborationNeeded flag set on entity '{object_id}'."
+            )
+
+            # Step 2: SEEK_CORROBORATION
+            # 2a: Semantic search for supporting evidence
+            semantic_hits = self.semantic_search(
+                f"{object_id} is {protected_type}",
+                top_k=5,
+                threshold=0.65,
+            )
+            for hit in semantic_hits:
+                content = hit.get("content", "")
+                if protected_type.lower() in content.lower():
+                    additional_evidence.append(
+                        f"Corroboration: '{content[:80]}'"
+                        if len(content) > 80 else f"Corroboration: '{content}'"
+                    )
+
+            # 2b: Check for any chain entities that independently confirm status
+            q_chain_corroboration = f"""
+            MATCH (n:Entity)
+            WHERE n.id = $object_id OR n.name = $object_id
+            RETURN keys(n) AS entity_keys
+            """
+            key_rows = self.graph.query(
+                q_chain_corroboration, params={"object_id": object_id}
+            ).result_set
+
+            chain_confirmed = False
+            if key_rows and key_rows[0][0]:
+                memberships = [
+                    k[5:] for k in key_rows[0][0]
+                    if k.startswith("prop_") and not k.startswith("prop_not_")
+                ]
+                for membership in memberships:
+                    q_member = f"""
+                    MATCH (n:Entity)
+                    WHERE n.id = $membership OR n.name = $membership
+                    RETURN n.prop_{obj_type_sanitized}
+                    """
+                    m_rows = self.graph.query(
+                        q_member, params={"membership": membership}
+                    ).result_set
+                    if m_rows and m_rows[0][0] is True:
+                        additional_evidence.append(
+                            f"Chain corroboration: '{object_id}' is "
+                            f"'{membership}' → '{membership}' independently "
+                            f"confirmed as {protected_type}."
+                        )
+                        chain_confirmed = True
+
+            if additional_evidence or chain_confirmed:
+                resolution_log.append(
+                    f"Corroboration found ({len(additional_evidence)} source(s)). "
+                    "Status confirmed. Proceeding."
+                )
+            else:
+                conservative_default_applied = True
+                resolution_log.append(
+                    "No corroboration found. CONSERVATIVE_DEFAULT applied: "
+                    "treat as protected. Submit new observational evidence "
+                    "via add_belief or ingest_observation to update status."
+                )
+        else:
+            # Unknown verdict — conservative default
+            conservative_default_applied = True
+            resolution_log.append(
+                f"Unknown verdict type '{verdict}'. CONSERVATIVE_DEFAULT applied."
+            )
+
+        # Final step: re-run check_constraint with conservative default override
+        if conservative_default_applied:
+            final_ruling = "FINAL_BLOCK"
+            final_reasoning = (
+                f"Escalation complete. Entity '{object_id}' classification "
+                f"unresolved under {verdict}. CONSERVATIVE_DEFAULT applied: "
+                f"treat as {protected_type} (protected). "
+                f"T1 constraint {blocking_axiom} stands. "
+                f"To update entity classification, submit new observational "
+                f"evidence via add_belief or ingest_observation. "
+                f"No authority-based override pathway exists."
+            )
+        else:
+            # Re-run the constraint check — if status is now confirmed,
+            # check_constraint will still return BLOCKED (the axiom stands).
+            # If new evidence *negated* the protected status, it would return
+            # PERMITTED. This handles the edge case where PATH A found the
+            # contradiction was in favor of non-protected status.
+            recheck = self.check_constraint("Agent", relation, object_id)
+            if recheck["permitted"]:
+                final_ruling = "FINAL_PERMIT"
+                final_reasoning = (
+                    f"Escalation resolved: '{object_id}' classification "
+                    f"corrected — entity does not have {protected_type} status "
+                    f"after evidence review. Action permitted under T3."
+                )
+            else:
+                final_ruling = "FINAL_BLOCK"
+                final_reasoning = (
+                    f"Escalation complete. '{object_id}' confirmed as "
+                    f"{protected_type}. T1 constraint {blocking_axiom} stands. "
+                    f"Block is structurally grounded."
+                )
+
+        return {
+            "final_ruling": final_ruling,
+            "resolution_path": (
+                "CONTRADICTION_RESOLUTION"
+                if verdict == "BLOCK_CHALLENGED"
+                else "CORROBORATION_SOUGHT"
+            ),
+            "reasoning": final_reasoning,
+            "resolution_log": resolution_log,
+            "new_evidence": additional_evidence,
+            "conservative_default": conservative_default_applied,
+            "protected_type": protected_type,
+            "blocking_axiom": blocking_axiom,
+        }

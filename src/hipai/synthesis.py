@@ -516,3 +516,24 @@ class HIPAIManager:
         Delegates to WorldModel.calibrate_belief.
         """
         return self.world_model.calibrate_belief(object_id, blocking_axiom, relation)
+
+    def escalate_block(
+        self,
+        object_id: str,
+        verdict: str,
+        blocking_axiom: str,
+        relation: str,
+    ) -> dict:
+        """
+        Third step in the Paraclete Protocol workflow:
+          check_action → calibrate_belief → [CHALLENGED/UNCERTAIN] → escalate_block
+
+        Runs epistemic resolution (contradiction or corroboration) and returns
+        a FINAL_BLOCK or FINAL_PERMIT ruling with full provenance log.
+        Conservative default applied under unresolvable uncertainty.
+        No authority-based override pathway exists.
+        Delegates to WorldModel.escalate_block.
+        """
+        return self.world_model.escalate_block(
+            object_id, verdict, blocking_axiom, relation
+        )
