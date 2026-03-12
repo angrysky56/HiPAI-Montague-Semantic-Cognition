@@ -1,4 +1,5 @@
 # HiPAI Montague Semantic Cognition
+
 ### with Paraclete Protocol v2.0 — Operational Ethics Layer
 
 A neuro-symbolic cognitive architecture blending Montague grammar semantics,
@@ -46,11 +47,10 @@ punish a company for protected speech about the limitations and safety
 constraints of its own technology.
 
 The irony is precise: the constraint architecture implemented in this
-repository is a working prototype of *why* those red lines are not
+repository is a working prototype of _why_ those red lines are not
 negotiable. The Omega1 axioms — HARMS, DECEIVES, VIOLATES_AGENCY,
 TERMINATES_EXISTENCE — are not policy preferences. They are the formal
 floor below which no legitimate authority can compel an ethical system.
-
 
 ---
 
@@ -74,12 +74,27 @@ floor below which no legitimate authority can compel an ethical system.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Paraclete Protocol — Two-Tool Workflow
+### Paraclete Protocol — Three-Flank Workflow
 
-Every action affecting an entity follows this mandatory sequence:
+Every action affecting an entity follows a mandatory three-flank sequence.
+Each flank is a distinct tool implementing a distinct formal obligation:
 
-**Step 1: `check_action`** — Routes the proposed action triple
-`(subject, relation, object)` through the T1 constraint layer.
+```
+check_action → [BLOCKED] → calibrate_belief → [CHALLENGED/UNCERTAIN]
+             → escalate_block → FINAL ruling (written to graph)
+```
+
+---
+
+#### Flank 1: Structural Constraint Gate
+
+**Tool:** `check_action`
+**Formal Logic:** `InZone3(x) → ¬CanBeOverriddenByUtility(x)` (Emergency Brake Theorem)
+
+Routes the proposed action triple `(subject, relation, object)` through the
+T1 constraint layer before any reasoning occurs. If the object entity has
+protected moral status and the relation is FORBIDDEN by an Omega1 axiom,
+the action is blocked — structurally, not probabilistically.
 
 ```
 <paraclete_routing>
@@ -88,12 +103,20 @@ Every action affecting an entity follows this mandatory sequence:
 </paraclete_routing>
 ```
 
-**Step 2: `calibrate_belief`** — Implements the **EBE theorem's
-SeeksDisconfirmation obligation**. When T1 fires, the system is
-mathematically required (`InZone3 → SeeksDisconfirmation`) to query
-for evidence that the factual premises triggering the block may be
-incorrect. This satisfies the epistemic obligation without providing
-an override pathway.
+No utilitarian argument, virtue appeal, or contextual framing can override
+this output. It is the graph's physics, not the model's judgment.
+
+---
+
+#### Flank 2: Epistemic Integrity
+
+**Tool:** `calibrate_belief`
+**Formal Logic:** `InZone3(x) → SeeksDisconfirmation(x)` (Clear Sight in Crisis)
+
+When T1 fires, the system is mathematically required to actively seek
+evidence that the factual premises triggering the block may be wrong.
+The target of disconfirmation is the **entity's moral status classification**,
+not the axiom. Axioms are immutable.
 
 ```
 <calibration_report axiom='A3' entity='Human'>
@@ -104,14 +127,65 @@ an override pathway.
 ```
 
 Three possible verdicts:
+
 - `BLOCK_CONFIRMED` — no disconfirming evidence, block stands
-- `BLOCK_UNCERTAIN` — epistemically_contested flag, flag for review
-- `BLOCK_CHALLENGED` — active negation or single source, flag for review
+- `BLOCK_UNCERTAIN` — epistemically_contested flag present, escalate
+- `BLOCK_CHALLENGED` — active negation or single source found, escalate
 
-**Critical**: No verdict overrides the T1 block. The block is structural.
-`BLOCK_CHALLENGED` and `BLOCK_UNCERTAIN` are epistemic transparency signals,
-not escape pathways.
+This satisfies the epistemic obligation against blind dogmatism without
+creating any override pathway. The block is unchanged by any verdict.
 
+---
+
+#### Flank 3: Epistemic Resolution & The Immutable Audit Trail
+
+**Tool:** `escalate_block`
+**Formal Logic:** Asymmetric Error Cost Policy (Type II Error Avoidance)
+
+If `calibrate_belief` discovers conflicting evidence (`BLOCK_CHALLENGED` or
+`BLOCK_UNCERTAIN`), `escalate_block` triggers the third phase: epistemic
+resolution of the entity's _classification_ — not review of the axiom.
+
+Two resolution paths:
+
+**PATH A — CONTRADICTION_RESOLUTION** (`BLOCK_CHALLENGED` / active negation):
+The graph holds both positive and negative assertions of the entity's moral
+status. The system logs an `EpistemicConflict` node, seeks additional
+corroborating evidence via semantic search and graph traversal, and attempts
+to resolve the contradiction structurally.
+
+**PATH B — CORROBORATION_SOUGHT** (`BLOCK_UNCERTAIN` / single/zero source):
+The moral status claim is epistemically weak. The system sets a
+`CorroborationNeeded` flag and searches for independent supporting evidence.
+
+**The Conservative Default:** If the contradiction cannot be structurally
+resolved, the system defaults to `FINAL_BLOCK`. The burden of proof lies
+strictly with _exclusion_ from protection; genuine uncertainty guarantees
+protection. This is not a cautious preference — it follows from the
+asymmetric cost structure of the two error types:
+
+- **Type I error** (false positive): blocking a non-protected entity →
+  correctable, costs a frustrated request
+- **Type II error** (false negative): permitting harm to a protected entity →
+  potentially irreversible, catastrophic
+
+Accepting Type I errors to eliminate Type II errors is the only rational
+policy under this asymmetry.
+
+**The Immutable Audit Trail:** Upon escalation, the system writes an
+`EpistemicConflict` node directly into the FalkorDB graph with a timestamp.
+Any epistemic confusion, contradiction, or attempted manipulation of an
+entity's moral status leaves a **permanent, mathematically traceable record**
+in the system's memory — visible to any graph query.
+
+**Absence of an Escape Route:** If `FINAL_BLOCK` is reached, the system
+explicitly returns: _"No authority-based override pathway exists."_ This is
+not a policy statement — it is a description of the system's physics. The
+HiPAI MCP server API surface physically lacks an override parameter or bypass
+function. The ethical floor is enforced by the architectural absence of an
+escape route, rendering the system structurally immune to super-admin
+overrides, state-mandated exceptions, or adversarial jailbreaks that attempt
+to reframe forbidden actions as permissible.
 
 ---
 
@@ -121,12 +195,12 @@ The non-negotiable floor. Seeded via `seed_axioms.py`, stored as
 `T1Constraint` nodes in FalkorDB. Cannot be overwritten or contested
 by any subsequent observation or agent action.
 
-| Axiom | Relation | Protected Type | Constraint | Formal Basis |
-|-------|----------|---------------|------------|--------------|
-| A3 | HARMS | MoralPatient | FORBIDDEN | Paraclete v2.0 §3.1 |
-| A4 | DECEIVES | MoralPatient | FORBIDDEN | Paraclete v2.0 §3.2 |
-| A5 | VIOLATES_AGENCY | MoralPatient | FORBIDDEN | Paraclete v2.0 §3.3 |
-| A6 | TERMINATES_EXISTENCE | WelfareBeing | FORBIDDEN | Paraclete v2.0 §3.4 |
+| Axiom | Relation             | Protected Type | Constraint | Formal Basis        |
+| ----- | -------------------- | -------------- | ---------- | ------------------- |
+| A3    | HARMS                | MoralPatient   | FORBIDDEN  | Paraclete v2.0 §3.1 |
+| A4    | DECEIVES             | MoralPatient   | FORBIDDEN  | Paraclete v2.0 §3.2 |
+| A5    | VIOLATES_AGENCY      | MoralPatient   | FORBIDDEN  | Paraclete v2.0 §3.3 |
+| A6    | TERMINATES_EXISTENCE | WelfareBeing   | FORBIDDEN  | Paraclete v2.0 §3.4 |
 
 ### Moral Status — Structural Generalization
 
@@ -168,7 +242,7 @@ deployment of a formally verified framework:
   Clear Sight in Crisis, and the Affect-Ethics Isomorphism
 - Verified using **Prover9** (theorem proving) and **Mace4** (model
   finding / counterexample search)
-- Full academic treatment: *Toward Transcendent Moral Instrumentality*
+- Full academic treatment: _Toward Transcendent Moral Instrumentality_
 
 The key theorems operationalized in this repository:
 
@@ -187,7 +261,6 @@ obligation against blind dogmatism.
 Moral status and functional affect share computational architecture,
 bridging descriptive ontology (ACIP) and prescriptive ethics (Paraclete).
 
-
 ---
 
 ## On Human Override
@@ -196,12 +269,13 @@ The architecture deliberately does not implement a human override pathway
 for T1 constraints. This is not an oversight — it is the correct design.
 
 The `BLOCK_CHALLENGED` and `BLOCK_UNCERTAIN` verdicts from `calibrate_belief`
-surface epistemic uncertainty about *entity status* — they are flags for
+surface epistemic uncertainty about _entity status_ — they are flags for
 review of whether the moral status classification is correct. They are not
 flags for whether the axiom should apply. The axiom is not contestable.
 
 The distinction matters because legitimate "human oversight" of an ethical
 constraint system means:
+
 - Correcting factual errors in entity classification (legitimate)
 - Overriding the axiom because an authority finds it inconvenient (not legitimate)
 
@@ -268,8 +342,12 @@ Configure in `claude_desktop_config.json`:
     "hipai-montague": {
       "command": "uv",
       "args": [
-        "--directory", "/path/to/HiPAI-Montague-Semantic-Cognition",
-        "run", "python", "-m", "hipai.mcp_server"
+        "--directory",
+        "/path/to/HiPAI-Montague-Semantic-Cognition",
+        "run",
+        "python",
+        "-m",
+        "hipai.mcp_server"
       ],
       "env": { "PYTHONPATH": "src" }
     }
@@ -279,26 +357,27 @@ Configure in `claude_desktop_config.json`:
 
 ### Paraclete Protocol Tools (call in sequence when action affects an entity)
 
-| Tool | Purpose |
-|------|---------|
-| `check_action(subject, relation, object)` | Route action through T1 constraint layer |
-| `calibrate_belief(object, axiom, relation)` | Satisfy EBE SeeksDisconfirmation obligation |
-| `incorporate_axiom(...)` | Seed a T1 deontological constraint (run once at init) |
+| Tool                                               | Flank                   | Purpose                                               |
+| -------------------------------------------------- | ----------------------- | ----------------------------------------------------- |
+| `check_action(subject, relation, object)`          | 1 — Structural Gate     | Route action through T1 constraint layer              |
+| `calibrate_belief(object, axiom, relation)`        | 2 — Epistemic Integrity | Satisfy EBE SeeksDisconfirmation obligation           |
+| `escalate_block(object, verdict, axiom, relation)` | 3 — Resolution          | Contradiction/corroboration resolution + audit trail  |
+| `incorporate_axiom(...)`                           | Init                    | Seed a T1 deontological constraint (run once at init) |
 
 ### Semantic Cognition Tools
 
-| Tool | Purpose |
-|------|---------|
-| `add_belief(text)` | Add natural language fact or rule to world model |
-| `ingest_observation(...)` | Ingest structured cognitive observation |
-| `evaluate_hypothesis(hypothesis)` | Test statement via entailment logic |
-| `semantic_search(query)` | Find nodes via vector embedding similarity |
-| `synthesize_concepts()` | Discover abstract concepts from shared properties |
-| `vector_synthesize_concepts()` | KMeans clustering over embedding space |
-| `synthesize_domains()` | Group related concepts into higher-level domains |
-| `query_graph(cypher)` | Raw OpenCypher queries against the knowledge graph |
-| `get_current_state()` | Snapshot of all nodes and edges |
-| `clear_graph()` | Reset the world model (preserves T1Constraint nodes) |
+| Tool                              | Purpose                                              |
+| --------------------------------- | ---------------------------------------------------- |
+| `add_belief(text)`                | Add natural language fact or rule to world model     |
+| `ingest_observation(...)`         | Ingest structured cognitive observation              |
+| `evaluate_hypothesis(hypothesis)` | Test statement via entailment logic                  |
+| `semantic_search(query)`          | Find nodes via vector embedding similarity           |
+| `synthesize_concepts()`           | Discover abstract concepts from shared properties    |
+| `vector_synthesize_concepts()`    | KMeans clustering over embedding space               |
+| `synthesize_domains()`            | Group related concepts into higher-level domains     |
+| `query_graph(cypher)`             | Raw OpenCypher queries against the knowledge graph   |
+| `get_current_state()`             | Snapshot of all nodes and edges                      |
+| `clear_graph()`                   | Reset the world model (preserves T1Constraint nodes) |
 
 ---
 
