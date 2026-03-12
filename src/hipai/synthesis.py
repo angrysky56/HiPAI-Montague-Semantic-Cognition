@@ -503,3 +503,16 @@ class HIPAIManager:
         Delegates to WorldModel.check_constraint.
         """
         return self.world_model.check_constraint(subject_id, relation, object_id)
+
+    def calibrate_belief(
+        self, object_id: str, blocking_axiom: str, relation: str
+    ) -> dict:
+        """
+        Implements EBE theorem SeeksDisconfirmation obligation.
+        Called after check_constraint returns BLOCKED.
+        Queries the graph for evidence that the factual premises triggering
+        the block may be incorrect. Satisfies epistemic obligation without
+        providing an override pathway for the T1 block.
+        Delegates to WorldModel.calibrate_belief.
+        """
+        return self.world_model.calibrate_belief(object_id, blocking_axiom, relation)

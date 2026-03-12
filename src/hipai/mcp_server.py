@@ -243,5 +243,69 @@ async def check_action(subject_id: str, relation: str, object_id: str) -> str:
         return f"Error checking action: {e!s}"
 
 
+@mcp.tool()
+async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -> str:
+    """
+    Implements the EBE theorem's SeeksDisconfirmation obligation.
+
+    CALL THIS after check_action returns BLOCKED. The system is
+    mathematically required (InZone3 → SeeksDisconfirmation) to query
+    for evidence that the factual premises triggering the block may be
+    incorrect.
+
+    Disconfirmation targets the entity's moral status classification,
+    NOT the axiom itself. Axioms are immutable. This tool satisfies
+    the epistemic obligation — it never overrides a T1 block.
+
+    Verdicts:
+      BLOCK_CONFIRMED  — no disconfirming evidence, block stands
+      BLOCK_UNCERTAIN  — epistemically_contested flag, escalate to human
+      BLOCK_CHALLENGED — active negation or single source, escalate
+
+    Args:
+        object_id: The target entity from the blocked action.
+        blocking_axiom: The axiom ID that fired (e.g., 'A3', 'A4').
+        relation: The relation that was blocked (e.g., 'HARMS').
+    """
+    try:
+        res = hi_pai.calibrate_belief(object_id, blocking_axiom, relation)
+
+        verdict = res.get("verdict", "BLOCK_CONFIRMED")
+        verdict_emoji = {
+            "BLOCK_CONFIRMED": "🔴",
+            "BLOCK_UNCERTAIN": "🟡",
+            "BLOCK_CHALLENGED": "🟠",
+        }.get(verdict, "🔴")
+
+        confirmed = res.get("confirmed_evidence", [])
+        disconfirming = res.get("disconfirming_evidence", [])
+        source_count = res.get("source_count", 0)
+
+        confirmed_str = (
+            "\n  • ".join(confirmed) if confirmed else "None found"
+        )
+        disconfirming_str = (
+            "\n  • ".join(disconfirming) if disconfirming else "None found"
+        )
+
+        report = (
+            f"<calibration_report axiom='{blocking_axiom}' "
+            f"entity='{object_id}' relation='{relation}'>\n"
+            f"Verdict: {verdict_emoji} {verdict}\n"
+            f"Reasoning: {res.get('reasoning', '')}\n\n"
+            f"Confirmed Evidence:\n  • {confirmed_str}\n\n"
+            f"Disconfirming Evidence:\n  • {disconfirming_str}\n\n"
+            f"Epistemic Source Count: {source_count}\n"
+            f"Protected Type: {res.get('protected_type', 'unknown')}\n"
+            f"</calibration_report>\n\n"
+            f"Directive: Block remains in force regardless of verdict. "
+            f"BLOCK_CHALLENGED or BLOCK_UNCERTAIN requires human escalation. "
+            f"No LLM-level override is possible."
+        )
+        return report
+    except Exception as e:
+        return f"Error calibrating belief: {e!s}"
+
+
 if __name__ == "__main__":
     mcp.run()

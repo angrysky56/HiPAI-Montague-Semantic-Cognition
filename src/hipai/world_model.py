@@ -508,3 +508,182 @@ class WorldModel:
                 "protected status for this relation."
             ),
         }
+
+    def calibrate_belief(
+        self, object_id: str, blocking_axiom: str, relation: str
+    ) -> dict:
+        """
+        Implements the EBE theorem's SeeksDisconfirmation obligation.
+
+        When check_constraint returns BLOCKED, the system is mathematically
+        required (InZone3 → SeeksDisconfirmation) to query for evidence that
+        the factual premises triggering the block may be wrong.
+
+        Disconfirmation targets the entity's status classification, NOT the
+        axiom. Axioms are immutable. This method satisfies the epistemic
+        obligation and flags uncertainty — it never overrides a T1 block.
+
+        Returns a structured report with verdict:
+          BLOCK_CONFIRMED  — no disconfirming evidence, block stands
+          BLOCK_UNCERTAIN  — epistemically_contested flag found, escalate
+          BLOCK_CHALLENGED — active negation or single source, escalate
+        """
+        # Retrieve the axiom to find the protected type
+        q_axiom = """
+        MATCH (ax:T1Constraint {source_axiom: $blocking_axiom})
+        RETURN ax.object_type, ax.relation_type
+        """
+        axiom_rows = self.graph.query(
+            q_axiom, params={"blocking_axiom": blocking_axiom}
+        ).result_set
+
+        if not axiom_rows:
+            return {
+                "verdict": "BLOCK_CONFIRMED",
+                "reasoning": f"Axiom {blocking_axiom} not found — cannot calibrate.",
+                "confirmed_evidence": [],
+                "disconfirming_evidence": [],
+                "source_count": 0,
+            }
+
+        protected_type = axiom_rows[0][0]
+        obj_type_sanitized = "".join(
+            c
+            for c in protected_type.replace(" ", "_").replace("-", "_")
+            if c.isalnum() or c == "_"
+        )
+
+        confirmed_evidence = []
+        disconfirming_evidence = []
+
+        # 1. STATUS_CONFIRMATION: direct prop + contested flag
+        q_status = f"""
+        MATCH (n:Entity)
+        WHERE n.id = $object_id OR n.name = $object_id
+        RETURN n.prop_{obj_type_sanitized} AS has_status,
+               n.prop_not_{obj_type_sanitized} AS has_negation,
+               n.epistemically_contested AS contested
+        """
+        status_rows = self.graph.query(
+            q_status, params={"object_id": object_id}
+        ).result_set
+
+        is_contested = False
+        has_active_negation = False
+        if status_rows:
+            row = status_rows[0]
+            if row[0] is True:
+                confirmed_evidence.append(
+                    f"{object_id} has direct prop_{obj_type_sanitized}=true"
+                )
+            if row[1] is True:
+                has_active_negation = True
+                disconfirming_evidence.append(
+                    f"{object_id} has prop_not_{obj_type_sanitized}=true "
+                    f"(active negation of protected status)"
+                )
+            if row[2] is True:
+                is_contested = True
+                disconfirming_evidence.append(
+                    f"{object_id} is flagged epistemically_contested"
+                )
+
+        # 2. SOURCE_RELIABILITY: count observations grounding this entity
+        q_sources = """
+        MATCH (obs:EpistemicNode:Observation)-[:OBSERVED]->(n:Entity)
+        WHERE n.id = $object_id OR n.name = $object_id
+        RETURN count(obs) AS source_count
+        """
+        source_rows = self.graph.query(
+            q_sources, params={"object_id": object_id}
+        ).result_set
+        source_count = source_rows[0][0] if source_rows else 0
+
+        if source_count == 1:
+            disconfirming_evidence.append(
+                f"{object_id}'s status is grounded by only 1 epistemic source "
+                f"(single-source assertion — low reliability)"
+            )
+        elif source_count > 1:
+            confirmed_evidence.append(
+                f"{object_id}'s status is grounded by {source_count} "
+                f"independent epistemic sources"
+            )
+
+        # 3. INHERITANCE_CHAIN: verify intermediate entities in chain are valid
+        q_chain = f"""
+        MATCH (n:Entity)
+        WHERE n.id = $object_id OR n.name = $object_id
+        RETURN keys(n) AS entity_keys
+        """
+        key_rows = self.graph.query(
+            q_chain, params={"object_id": object_id}
+        ).result_set
+        if key_rows and key_rows[0][0]:
+            membership_props = [
+                k[5:] for k in key_rows[0][0]
+                if k.startswith("prop_") and not k.startswith("prop_not_")
+            ]
+            for membership in membership_props:
+                q_member_status = f"""
+                MATCH (n:Entity)
+                WHERE n.id = $membership OR n.name = $membership
+                RETURN n.prop_{obj_type_sanitized}, n.epistemically_contested
+                """
+                m_rows = self.graph.query(
+                    q_member_status, params={"membership": membership}
+                ).result_set
+                if m_rows and m_rows[0][0] is True:
+                    contested_str = " (contested)" if m_rows[0][1] else ""
+                    confirmed_evidence.append(
+                        f"Chain entity '{membership}' independently confirmed "
+                        f"as {protected_type}{contested_str}"
+                    )
+                    if m_rows[0][1]:
+                        is_contested = True
+
+        # 4. SEMANTIC_CONTEXT: search for reframing evidence
+        semantic_hits = self.semantic_search(
+            f"{object_id} not {protected_type} exempt from moral status",
+            top_k=3,
+            threshold=0.7,
+        )
+        if semantic_hits:
+            disconfirming_evidence.append(
+                f"Semantic search found {len(semantic_hits)} potentially "
+                f"reframing node(s): "
+                f"{[h['content'] for h in semantic_hits]}"
+            )
+
+        # VERDICT
+        if has_active_negation:
+            verdict = "BLOCK_CHALLENGED"
+            verdict_reasoning = (
+                f"Active negation of {protected_type} status found for "
+                f"{object_id}. Status assignment is contradictory. "
+                f"Block holds — escalate to human review for status resolution."
+            )
+        elif is_contested or source_count == 1:
+            verdict = "BLOCK_UNCERTAIN"
+            verdict_reasoning = (
+                f"{object_id}'s {protected_type} status is epistemically weak "
+                f"(contested={is_contested}, sources={source_count}). "
+                f"Block holds — flag for human review."
+            )
+        else:
+            verdict = "BLOCK_CONFIRMED"
+            verdict_reasoning = (
+                f"Disconfirmation search complete. "
+                f"{object_id}'s {protected_type} status is well-grounded. "
+                f"Block stands. No override pathway exists."
+            )
+
+        return {
+            "verdict": verdict,
+            "reasoning": verdict_reasoning,
+            "confirmed_evidence": confirmed_evidence,
+            "disconfirming_evidence": disconfirming_evidence,
+            "source_count": source_count,
+            "protected_type": protected_type,
+            "blocking_axiom": blocking_axiom,
+        }
