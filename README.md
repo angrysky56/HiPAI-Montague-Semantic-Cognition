@@ -15,7 +15,7 @@ computational graph physics**, not behavioral probability.
 
 The system's ethical constraints are not prompts, fine-tuning weights, or
 probabilistic tendencies. They are **immutable edges in a knowledge graph**,
-verified against a set of 34 axioms using Prover9/Mace4 theorem provers,
+verified against [a set of 34 axioms using Prover9/Mace4 theorem provers](docs/logic),
 and enforced before any reasoning occurs. When the Emergency Brake fires,
 no argument — utilitarian, virtue-based, or contextual — can override it.
 
