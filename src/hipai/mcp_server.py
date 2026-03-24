@@ -17,8 +17,11 @@ hi_pai = HIPAIManager(graph_name="hipai_world")
 
 @mcp.tool()
 async def add_belief(text: str) -> str:
-    """Add a belief or fact to the system in natural language
-    (e.g., 'Socrates is a man')."""
+    """Add a belief or fact to the system in natural language.
+    Supports: 'X is Y', 'X is a Y', 'All X are Y', 'X has Y',
+    'X causes Y', 'X exploits Y', and other relational patterns.
+    Examples: 'Socrates is a man', 'Social media exploits attention',
+    'Hunter-gatherers have low obesity rates'."""
     try:
         res = hi_pai.add_belief(text)
         return json.dumps(res, indent=2)
@@ -28,7 +31,9 @@ async def add_belief(text: str) -> str:
 
 @mcp.tool()
 async def evaluate_hypothesis(hypothesis: str) -> str:
-    """Evaluate a hypothesis against the current knowledge in the graph."""
+    """Evaluate a hypothesis against the current knowledge in the graph.
+    Supports: 'X is Y', 'X has Y', 'X causes Y', 'X exploits Y', and other patterns.
+    Falls back to semantic search when structured parsing fails."""
     try:
         res = hi_pai.evaluate_hypothesis(hypothesis)
         return (

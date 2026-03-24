@@ -173,29 +173,37 @@ class HIPAIManager:
     def add_belief(self, text: str) -> dict:
         """
         Parses a natural language belief into the system.
-        Since we don't have an LLM connected in this basic version,
-        we use basic string parsing to create Observations.
+        Supports multiple patterns beyond simple "X is Y":
+          - "X is Y" / "X is a Y" / "X is not Y" / "X is not a Y"
+          - "All X are Y"
+          - "X has Y" / "X have Y"
+          - "X causes Y" / "X leads to Y" / "X produces Y"
+          - "X Verb Y" (fallback: creates a relation between X and Y)
         """
         from .models import Individual, Observation
 
-        text = text.strip(".")
+        text = text.strip().strip(".")
 
-        # Basic parser for "X is not a Y"
+        # ─── Pattern 1: "X is not a Y" ───
         if " is not a " in text:
             subject, obj = text.split(" is not a ", 1)
             obs = Observation(
                 text_source=text,
                 individuals=[
-                    Individual(id=subject, name=subject, properties=[f"not_{obj}"])
+                    Individual(id=subject.strip(), name=subject.strip(),
+                               properties=[f"not_{obj.strip()}"])
                 ],
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added negative belief: {text}"}
 
-        # Super basic parser for "X is a Y"
-        if " is a " in text:
-            subject, obj = text.split(" is a ", 1)
+        # ─── Pattern 2: "X is a Y" ───
+        if " is a " in text or " is an " in text:
+            sep = " is an " if " is an " in text else " is a "
+            subject, obj = text.split(sep, 1)
+            subject = subject.strip()
+            obj = obj.strip()
             obs = Observation(
                 text_source=text,
                 individuals=[Individual(id=subject, name=subject, properties=[obj])],
@@ -204,11 +212,9 @@ class HIPAIManager:
             self.world_model.incorporate_observation(obs)
 
             import inflect
-
             p = inflect.engine()
             singular_class = p.singular_noun(obj) or obj
             concept_name = f"Concept_{singular_class.capitalize()}"
-
             cypher = """
             MATCH (e:Entity {id: $subject})
             MERGE (c:Concept {name: $concept_name})
@@ -217,66 +223,135 @@ class HIPAIManager:
             self.world_model.query_graph(
                 cypher, {"subject": subject, "concept_name": concept_name}
             )
-
             return {"status": "success", "message": f"Added belief: {text}"}
 
-        # Basic parser for "X is not Y"
+        # ─── Pattern 3: "All X are Y" ───
+        if text.startswith("All ") and " are " in text:
+            parts = text[4:].split(" are ")
+            if len(parts) == 2:
+                subject_class = parts[0].strip()
+                obj_property = parts[1].strip()
+                import inflect
+                p = inflect.engine()
+                singular_class = p.singular_noun(subject_class) or subject_class
+                concept_name = f"Concept_{singular_class.capitalize()}"
+                self.world_model.create_structure_note(concept_name, [])
+                prop_key = obj_property.replace(" ", "_").replace("-", "_")
+                prop_key = "".join(c for c in prop_key if c.isalnum() or c == "_")
+                q = (
+                    f"MATCH (c:Concept {{name: '{concept_name}'}}) "
+                    f"SET c.prop_{prop_key} = true"
+                )
+                self.world_model.query_graph(q)
+                return {"status": "success", "message": f"Added universal belief: {text}"}
+
+        # ─── Pattern 4: "X is not Y" ───
         if " is not " in text:
             subject, obj = text.split(" is not ", 1)
             obs = Observation(
                 text_source=text,
                 individuals=[
-                    Individual(id=subject, name=subject, properties=[f"not_{obj}"])
+                    Individual(id=subject.strip(), name=subject.strip(),
+                               properties=[f"not_{obj.strip()}"])
                 ],
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added negative belief: {text}"}
 
-        # Basic parser for "X is Y"
+        # ─── Pattern 5: "X is Y" ───
         if " is " in text:
             subject, obj = text.split(" is ", 1)
             obs = Observation(
                 text_source=text,
-                individuals=[Individual(id=subject, name=subject, properties=[obj])],
+                individuals=[
+                    Individual(id=subject.strip(), name=subject.strip(),
+                               properties=[obj.strip()])
+                ],
                 relations=[],
             )
             self.world_model.incorporate_observation(obs)
             return {"status": "success", "message": f"Added belief: {text}"}
 
-        # Basic parser for "All Xs are Ys"
-        if text.startswith("All ") and " are " in text:
-            parts = text[4:].split(" are ")
-            if len(parts) == 2:
-                subject_class = parts[0]
-                obj_property = parts[1]
-
-                import inflect
-
-                p = inflect.engine()
-                singular_class = p.singular_noun(subject_class) or subject_class
-
-                # Logically, this creates a rule.
-                # For this basic implementation, we just store it as a
-                # Concept-level property.
-                concept_name = f"Concept_{singular_class.capitalize()}"
-                self.world_model.create_structure_note(concept_name, [])
-                # Apply the property to the concept
-                prop_key = obj_property.strip().replace(" ", "_").replace("-", "_")
-                q = (
-                    f"MATCH (c:Concept {{name: '{concept_name}'}}) "
-                    f"SET c.prop_{prop_key} = true"
+        # ─── Pattern 6: "X has/have Y" ───
+        for sep in (" has ", " have "):
+            if sep in text:
+                subject, obj = text.split(sep, 1)
+                obs = Observation(
+                    text_source=text,
+                    individuals=[
+                        Individual(id=subject.strip(), name=subject.strip(),
+                                   properties=[obj.strip()])
+                    ],
+                    relations=[],
                 )
-                self.world_model.query_graph(q)
-                return {
-                    "status": "success",
-                    "message": f"Added universal belief: {text}",
-                }
+                self.world_model.incorporate_observation(obs)
+                return {"status": "success", "message": f"Added belief: {text}"}
 
-        return {
-            "status": "error",
-            "message": "Failed to parse belief. Use 'X is Y' or 'All X are Y' format.",
-        }
+        # ─── Pattern 7: "X are Y" (without "All") ───
+        if " are " in text:
+            subject, obj = text.split(" are ", 1)
+            obs = Observation(
+                text_source=text,
+                individuals=[
+                    Individual(id=subject.strip(), name=subject.strip(),
+                               properties=[obj.strip()])
+                ],
+                relations=[],
+            )
+            self.world_model.incorporate_observation(obs)
+            return {"status": "success", "message": f"Added belief: {text}"}
+
+        # ─── Pattern 8: Relational verbs → create a relation ───
+        # "X causes Y", "X leads to Y", "X produces Y", "X exploits Y", etc.
+        import re
+        relational_patterns = [
+            (r"^(.+?)\s+(causes?|leads?\s+to|produces?|creates?|triggers?|generates?|enables?|prevents?|blocks?|inhibits?)\s+(.+)$", None),
+            (r"^(.+?)\s+(exploits?|manipulates?|influences?|affects?|impacts?|shapes?|alters?|modifies?)\s+(.+)$", None),
+            (r"^(.+?)\s+(requires?|needs?|depends?\s+on|relies?\s+on)\s+(.+)$", None),
+            (r"^(.+?)\s+(supports?|confirms?|contradicts?|challenges?|undermines?)\s+(.+)$", None),
+        ]
+        for pattern, _ in relational_patterns:
+            m = re.match(pattern, text, re.IGNORECASE)
+            if m:
+                subject = m.group(1).strip()
+                verb = m.group(2).strip()
+                obj = m.group(3).strip()
+                # Sanitize verb for relation type
+                rel_type = verb.upper().replace(" ", "_")
+                rel_type = "".join(c for c in rel_type if c.isalnum() or c == "_")
+
+                from .models import Relation
+                obs = Observation(
+                    text_source=text,
+                    individuals=[
+                        Individual(id=subject, name=subject),
+                        Individual(id=obj, name=obj),
+                    ],
+                    relations=[
+                        Relation(source_id=subject, target_id=obj, relation_type=rel_type)
+                    ],
+                )
+                self.world_model.incorporate_observation(obs)
+                return {"status": "success",
+                        "message": f"Added relational belief: {subject} -{rel_type}-> {obj}"}
+
+        # ─── Fallback: store as free-text entity with the full text as content ───
+        # Better than failing — the text is still searchable via semantic search
+        obs = Observation(
+            text_source=text,
+            individuals=[
+                Individual(
+                    id=text[:50].replace(" ", "_").lower(),
+                    name=text,
+                    properties=["unstructured_belief"],
+                )
+            ],
+            relations=[],
+        )
+        self.world_model.incorporate_observation(obs)
+        return {"status": "success",
+                "message": f"Added as unstructured belief (no pattern matched): {text}"}
 
     def get_current_state(self) -> dict:
         """Returns a snapshot of the current state of the World Model."""
@@ -310,17 +385,103 @@ class HIPAIManager:
 
         # 1. Normalize the property and identify if it's a negation.
         is_negative = False
+        subject = None
+        obj = None
+
         if " is not " in hypothesis:
             subject, obj = hypothesis.split(" is not ", 1)
             is_negative = True
         elif " is " in hypothesis:
             subject, obj = hypothesis.split(" is ", 1)
-        else:
+        elif " are not " in hypothesis:
+            subject, obj = hypothesis.split(" are not ", 1)
+            is_negative = True
+        elif " are " in hypothesis:
+            subject, obj = hypothesis.split(" are ", 1)
+        elif " has " in hypothesis:
+            subject, obj = hypothesis.split(" has ", 1)
+        elif " have " in hypothesis:
+            subject, obj = hypothesis.split(" have ", 1)
+
+        # Relational verb fallback — check for relation in graph
+        if subject is None:
+            import re
+            rel_match = re.match(
+                r"^(.+?)\s+(causes?|leads?\s+to|produces?|exploits?|"
+                r"prevents?|supports?|contradicts?|affects?|influences?)\s+(.+)$",
+                hypothesis, re.IGNORECASE,
+            )
+            if rel_match:
+                subject = rel_match.group(1).strip()
+                verb = rel_match.group(2).strip().upper().replace(" ", "_")
+                verb = "".join(c for c in verb if c.isalnum() or c == "_")
+                target = rel_match.group(3).strip()
+                # Check if this relation exists in the graph
+                q_rel = f"""
+                MATCH (a:Entity)-[r:{verb}]->(b:Entity)
+                WHERE (a.id = $subject OR a.name = $subject)
+                AND (b.id = $target OR b.name = $target)
+                RETURN a.name, type(r), b.name
+                """
+                res_rel = self.world_model.query_graph(
+                    q_rel, {"subject": subject, "target": target}
+                )
+                if res_rel:
+                    return {
+                        "hypothesis": hypothesis,
+                        "entailment": "Entailed",
+                        "confidence": 1.0,
+                        "reasoning": (
+                            f"Relation {verb} from '{subject}' to '{target}' "
+                            f"found in graph."
+                        ),
+                    }
+                # Try semantic search as fallback
+                hits = self.world_model.semantic_search(hypothesis, top_k=3, threshold=0.8)
+                if hits:
+                    return {
+                        "hypothesis": hypothesis,
+                        "entailment": "Undetermined",
+                        "confidence": 0.3,
+                        "reasoning": (
+                            f"No direct relation found, but semantic search "
+                            f"found {len(hits)} related nodes: "
+                            f"{[h.get('content', '') for h in hits[:3]]}"
+                        ),
+                    }
+                return {
+                    "hypothesis": hypothesis,
+                    "entailment": "Undetermined",
+                    "confidence": 0.0,
+                    "reasoning": (
+                        f"No info found about '{hypothesis}' in the knowledge graph. "
+                        f"Try adding relevant beliefs first with add_belief."
+                    ),
+                }
+
+        if subject is None:
+            # Last resort: semantic search
+            hits = self.world_model.semantic_search(hypothesis, top_k=3, threshold=0.8)
+            if hits:
+                return {
+                    "hypothesis": hypothesis,
+                    "entailment": "Undetermined",
+                    "confidence": 0.3,
+                    "reasoning": (
+                        f"Could not parse hypothesis structure, but semantic search "
+                        f"found {len(hits)} related nodes: "
+                        f"{[h.get('content', '') for h in hits[:3]]}"
+                    ),
+                }
             return {
                 "hypothesis": hypothesis,
-                "entailment": "Error",
+                "entailment": "Undetermined",
                 "confidence": 0.0,
-                "reasoning": "Failed to parse. Use 'X is Y' or 'X is not Y'.",
+                "reasoning": (
+                    f"Could not parse hypothesis and no related nodes found. "
+                    f"Try phrasing as 'X is Y', 'X has Y', 'X causes Y', "
+                    f"or add relevant beliefs first."
+                ),
             }
 
         subject = subject.strip()
