@@ -11,4 +11,13 @@
 ## Phase 2: Logical Form Expansion and Montague Grammar Integration
 **Goal:** Expand the parser's vocabulary and handle more complex linguistic structures (e.g., quantification and tense).
 
-- [ ] PLAN-1: TBD
+- [x] PLAN-1: Integrate Tense (past/future) into models and graph persistence
+- [x] PLAN-2: Implement support for Montague quantifiers (Some, No)
+- [x] PLAN-3: Resolve quantifier pattern ambiguity and harden synthesis
+
+## Phase 3: Intensional Logic and Modal Verbs
+**Goal:** Support propositional attitudes (Believe, Know) and modal necessity (Must, Can).
+
+- [ ] PLAN-1: Implement attitude verb parsing and propositional graph reification
+- [ ] PLAN-2: Implement modal auxiliary parsing and intensional entailment logic
+- [ ] PLAN-3: Extend evaluation engine for factive and modal reasoning

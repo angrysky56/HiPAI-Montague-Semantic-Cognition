@@ -59,6 +59,12 @@ class Relation(BaseModel):
     tense: Literal["past", "present", "future"] = Field(
         default="present", description="The temporal context of the relation."
     )
+    modality: Literal["must", "can", "may", "should"] | None = Field(
+        default=None, description="Optional modal necessity/possibility."
+    )
+    is_factive: bool = Field(
+        default=False, description="Whether the relation entails the truth of its complement."
+    )
 
 
 class TruthValue(BaseModel):
@@ -90,6 +96,12 @@ class Observation(BaseModel):
     )
     tense: Literal["past", "present", "future"] = Field(
         default="present", description="The temporal context of the overall observation."
+    )
+    modality: Literal["must", "can", "may", "should"] | None = Field(
+        default=None, description="Optional modal necessity/possibility."
+    )
+    subject_id: str | None = Field(
+        default=None, description="The ID of the subject entity holding this attitude (for nested observations)."
     )
 
 

@@ -37,7 +37,7 @@ async def test_mcp_pruning_resolution():
         constraint="FORBIDDEN",
         source_axiom="A1"
     ))
-    hi_pai.world_model.query_graph("MERGE (p:Entity {id: 'Plato'}) MERGE (c:Concept {name: 'Student'}) MERGE (p)-[:INSTANCE_OF]->(c)")
+    hi_pai.world_model.query_graph("MERGE (p:Entity {id: 'Plato'}) MERGE (c:Concept {name: 'Concept_Student'}) MERGE (p)-[:INSTANCE_OF]->(c)")
     
     # Statement: 'Socrates is a teacher who harms Plato'
     # Parse 1: Property (Valid)

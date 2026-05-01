@@ -87,7 +87,9 @@ class WorldModel:
         MERGE (o:EpistemicNode:Observation {event_id: $event_id})
         SET o.text_source = $text_source,
             o.timestamp = $timestamp,
-            o.tense = $tense
+            o.tense = $tense,
+            o.modality = $modality,
+            o.subject_id = $subject_id
         """
         import datetime
 
@@ -98,6 +100,8 @@ class WorldModel:
                 "text_source": obs.text_source,
                 "timestamp": datetime.datetime.now().isoformat(),
                 "tense": obs.tense,
+                "modality": obs.modality,
+                "subject_id": obs.subject_id,
             },
         )
 
@@ -184,7 +188,9 @@ class WorldModel:
             SET r.truth_value = COALESCE(r.truth_value, 1),
                 r.epistemic_state = 'asserted',
                 r.event_id = $event_id,
-                r.tense = $tense
+                r.tense = $tense,
+                r.modality = $modality,
+                r.is_factive = $is_factive
             """
             self.graph.query(
                 query,
@@ -192,7 +198,9 @@ class WorldModel:
                     "source": source, 
                     "target": target, 
                     "event_id": obs.event_id,
-                    "tense": relation.tense
+                    "tense": relation.tense,
+                    "modality": relation.modality,
+                    "is_factive": relation.is_factive,
                 },
             )
 

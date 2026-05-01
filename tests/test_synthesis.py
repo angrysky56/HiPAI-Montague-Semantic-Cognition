@@ -33,8 +33,6 @@ def test_synthesis():
     result = manager.evaluate_hypothesis("Socrates is mortal")
 
     print(f"Result: {result['entailment']}")
-    print(f"Confidence: {result['confidence']}")
-    print(f"Reasoning: {result['reasoning']}")
 
     assert result["entailment"] == "Entailed"
     print("[!] Test passed!")

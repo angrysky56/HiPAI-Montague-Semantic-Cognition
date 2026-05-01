@@ -162,18 +162,58 @@ class HIPAIManager:
     This class provides the interface expected by test_hipai.py.
     """
 
+    # Map of verb forms to their canonical base/stem for relation type matching.
+    # If a verb matches as a regex key, use the corresponding base form.
+    _VERB_STEM_OVERRIDES: dict[str, str] = {
+        "causes": "cause", "leads": "lead", "produces": "produce",
+        "creates": "create", "triggers": "trigger", "generates": "generate",
+        "enables": "enable", "prevents": "prevent", "blocks": "block",
+        "inhibits": "inhibit", "harms": "harm",
+        "exploits": "exploit", "manipulates": "manipulate",
+        "influences": "influence", "affects": "affect", "impacts": "impact",
+        "shapes": "shape", "alters": "alter", "modifies": "modify",
+        "requires": "require", "needs": "need",
+        "supports": "support", "confirms": "confirm",
+        "contradicts": "contradict", "challenges": "challenge",
+        "undermines": "undermine",
+        "visits": "visit", "sees": "see", "meets": "meet",
+        "calls": "call", "loves": "love", "hates": "hate",
+    }
+
+    @staticmethod
+    def _normalize_verb(verb: str) -> str:
+        """Normalize an inflected verb to its base/stem form for relation type creation.
+
+        Uses an explicit override table for known verbs, then falls back to
+        simple suffix stripping (``-es`` → ``-e``, ``-s`` → base).
+        """
+        v = verb.lower().strip()
+        if v in HIPAIManager._VERB_STEM_OVERRIDES:
+            return HIPAIManager._VERB_STEM_OVERRIDES[v]
+        # Fallback heuristics
+        if v.endswith("ies"):          # e.g. "relies" → "rely"
+            return v[:-3] + "y"
+        if v.endswith("ses") or v.endswith("zes") or v.endswith("xes") or v.endswith("ches") or v.endswith("shes"):
+            return v[:-2]              # e.g. "causes" already handled above
+        if v.endswith("es"):
+            return v[:-1]              # e.g. "produces" → "produce"
+        if v.endswith("s") and not v.endswith("ss"):
+            return v[:-1]              # e.g. "harms" → "harm"
+        return v
+
     def __init__(self, graph_name: str = "hipai_world"):
         self.world_model = WorldModel(graph_name=graph_name)
         self.synthesizer = ZettelkastenSynthesizer(self.world_model)
+        self.logger = logger
 
     def clear_database(self):
         """Standardizer for clearing the model's graph database."""
         self.world_model.clear_database()
 
-    def add_belief(self, text: str) -> dict:
+    def add_belief(self, text: str, incorporate: bool = True) -> dict[str, Any]:
         """
-        Parses a natural language belief into the system.
-        Supports multiple patterns and detects ambiguity.
+        Synthesize a belief from natural language text and add it to the graph if incorporate is True.
+        Handles contradictions and logic routing.
         
         If multiple interpretations are found, raises AmbiguityDetectedError.
         If no structured patterns match, falls back to unstructured belief.
@@ -184,15 +224,94 @@ class HIPAIManager:
         import inflect
 
         text = text.strip().strip(".")
+
+        # ─── Pattern 11: Attitude Verbs (Checked first to avoid ambiguity) ───
+        attitude_match = re.match(r"^(.+?)\s+(believes?|knows?|says?|thinks?)\s+that\s+(.+)$", text, re.IGNORECASE)
+        if attitude_match:
+            subject = attitude_match.group(1).strip()
+            verb = attitude_match.group(2).strip().lower()
+            proposition = attitude_match.group(3).strip()
+            
+            # Factive attitudes (e.g. knows) entail their propositions.
+            # Non-factive attitudes do not.
+            is_factive = verb in ["knows", "know"]
+            
+            # Recursively call self.add_belief to get the nested Observation
+            # Only incorporate if factive, to avoid polluting the graph with non-factive properties
+            res = self.add_belief(proposition, incorporate=is_factive)
+            if res.get("status") == "success" and "observation" in res:
+                nested_obs = res["observation"]
+                
+                # If it's non-factive, we STILL need to create the Observation node itself 
+                # to point the attitude relation to it, but without asserting its properties.
+                if not is_factive:
+                    self.world_model.graph.query(
+                        "MERGE (o:EpistemicNode:Observation {event_id: $event_id}) "
+                        "SET o.text_source = $text_source, o.modality = $modality",
+                        params={
+                            "event_id": nested_obs.event_id,
+                            "text_source": nested_obs.text_source,
+                            "modality": nested_obs.modality
+                        }
+                    )
+                
+                attitude_rel_type = verb.upper()
+                
+                obs = Observation(
+                    text_source=text,
+                    individuals=[Individual(id=subject, name=subject)],
+                    relations=[],
+                    tense="present",
+                )
+                
+                # Link subject -> nested_observation
+                if incorporate:
+                    self.world_model.graph.query(
+                        f"""
+                        MERGE (o:EpistemicNode:Observation {{event_id: $event_id}})
+                        MERGE (e:ContentNode:Entity {{id: $subject}})
+                        MERGE (nested:EpistemicNode:Observation {{event_id: $nested_event_id}})
+                        MERGE (e)-[r:{attitude_rel_type}]->(nested)
+                        SET r.is_factive = $is_factive
+                        MERGE (o)-[:OBSERVED]->(e)
+                        """,
+                        params={
+                            "event_id": obs.event_id,
+                            "subject": subject,
+                            "nested_event_id": nested_obs.event_id,
+                            "is_factive": is_factive
+                        }
+                    )
+                
+                parse = {
+                    "observation": obs,
+                    "type": "attitude_belief",
+                    "attitude": verb,
+                    "subject": subject,
+                    "nested_observation": nested_obs
+                }
+                
+                return {
+                    "status": "success", 
+                    "message": f"Successfully parsed and {'added' if incorporate else 'processed'} attitude belief.",
+                    "observation": obs,
+                    "parse": parse
+                }
+            else:
+                return res # return nested error
+
         possible_parses = []
 
         # ─── Pattern 1: "X is not a Y" / "X was not a Y" / "X will not be a Y" ───
         neg_a_seps = [
-            (" will not be a ", "future"), (" will not be an ", "future"),
-            (" was not a ", "past"), (" was not an ", "past"), (" were not a ", "past"), (" were not an ", "past"),
-            (" is not a ", "present"), (" is not an ", "present"), (" are not a ", "present"), (" are not an ", "present")
+            (" will not be a ", "future", None), (" will not be an ", "future", None),
+            (" was not a ", "past", None), (" was not an ", "past", None), (" were not a ", "past", None), (" were not an ", "past", None),
+            (" is not a ", "present", None), (" is not an ", "present", None), (" are not a ", "present", None), (" are not an ", "present", None),
+            (" must not be a ", "present", "must"), (" must not be an ", "present", "must"),
+            (" cannot be a ", "present", "can"), (" cannot be an ", "present", "can"), (" can not be a ", "present", "can"), (" can not be an ", "present", "can"),
+            (" should not be a ", "present", "should"), (" should not be an ", "present", "should")
         ]
-        for sep, t in neg_a_seps:
+        for sep, t, mod in neg_a_seps:
             if sep in text and not text.startswith(("All ", "Some ", "No ")):
                 subject, obj = text.split(sep, 1)
                 obs = Observation(
@@ -202,18 +321,22 @@ class HIPAIManager:
                                    properties=[f"not_{obj.strip()}"])
                     ],
                     relations=[],
-                    tense=t
+                    tense=t,
+                    modality=mod
                 )
                 possible_parses.append({"observation": obs, "type": "negative_property_a", "tense": t})
                 break
 
         # ─── Pattern 2: "X is a Y" / "X was a Y" / "X will be a Y" ───
         pos_a_seps = [
-            (" will be a ", "future"), (" will be an ", "future"),
-            (" was a ", "past"), (" was an ", "past"), (" were a ", "past"), (" were an ", "past"),
-            (" is a ", "present"), (" is an ", "present"), (" are a ", "present"), (" are an ", "present")
+            (" will be a ", "future", None), (" will be an ", "future", None),
+            (" was a ", "past", None), (" was an ", "past", None), (" were a ", "past", None), (" were an ", "past", None),
+            (" is a ", "present", None), (" is an ", "present", None), (" are a ", "present", None), (" are an ", "present", None),
+            (" must be a ", "present", "must"), (" must be an ", "present", "must"),
+            (" can be a ", "present", "can"), (" can be an ", "present", "can"),
+            (" should be a ", "present", "should"), (" should be an ", "present", "should")
         ]
-        for sep, t in pos_a_seps:
+        for sep, t, mod in pos_a_seps:
             if sep in text and not text.startswith(("All ", "Some ", "No ")):
                 subject, obj = text.split(sep, 1)
                 subject = subject.strip()
@@ -222,7 +345,8 @@ class HIPAIManager:
                     text_source=text,
                     individuals=[Individual(id=subject, name=subject, properties=[obj])],
                     relations=[],
-                    tense=t
+                    tense=t,
+                    modality=mod
                 )
                 
                 p = inflect.engine()
@@ -259,9 +383,10 @@ class HIPAIManager:
 
         # ─── Pattern 4: "X is not Y" / "X was not Y" / "X will not be Y" ───
         neg_seps = [
-            (" will not be ", "future"), (" was not ", "past"), (" were not ", "past"), (" is not ", "present"), (" are not ", "present")
+            (" will not be ", "future", None), (" was not ", "past", None), (" were not ", "past", None), (" is not ", "present", None), (" are not ", "present", None),
+            (" must not be ", "present", "must"), (" cannot be ", "present", "can"), (" can not be ", "present", "can"), (" should not be ", "present", "should")
         ]
-        for sep, t in neg_seps:
+        for sep, t, mod in neg_seps:
             if sep in text and f"{sep}a " not in text and f"{sep}an " not in text and not text.startswith(("All ", "Some ", "No ")):
                 subject, obj = text.split(sep, 1)
                 obs = Observation(
@@ -271,16 +396,18 @@ class HIPAIManager:
                                    properties=[f"not_{obj.strip()}"])
                     ],
                     relations=[],
-                    tense=t
+                    tense=t,
+                    modality=mod
                 )
                 possible_parses.append({"observation": obs, "type": "negative_property", "tense": t})
                 break
 
         # ─── Pattern 5: "X is Y" / "X was Y" / "X will be Y" ───
         pos_seps = [
-            (" will be ", "future"), (" was ", "past"), (" were ", "past"), (" is ", "present"), (" are ", "present")
+            (" will be ", "future", None), (" was ", "past", None), (" were ", "past", None), (" is ", "present", None), (" are ", "present", None),
+            (" must be ", "present", "must"), (" can be ", "present", "can"), (" should be ", "present", "should")
         ]
-        for sep, t in pos_seps:
+        for sep, t, mod in pos_seps:
             # Check to avoid overlapping with "is a", "is not", "All X are Y", etc.
             if sep in text and not text.startswith(("All ", "Some ", "No ")) and not any(s[0] in text for s in neg_a_seps + pos_a_seps + neg_seps):
                 subject, obj = text.split(sep, 1)
@@ -291,7 +418,8 @@ class HIPAIManager:
                                    properties=[obj.strip()])
                     ],
                     relations=[],
-                    tense=t
+                    tense=t,
+                    modality=mod
                 )
                 possible_parses.append({"observation": obs, "type": "property_assignment", "tense": t})
                 break
@@ -325,11 +453,11 @@ class HIPAIManager:
 
         # ─── Pattern 8: Relational verbs → create a relation ───
         relational_patterns = [
-            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have)\s+)?(causes?|leads?\s+to|produces?|creates?|triggers?|generates?|enables?|prevents?|blocks?|inhibits?)\s+(.+)$", "causal"),
-            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have)\s+)?(exploits?|manipulates?|influences?|affects?|impacts?|shapes?|alters?|modifies?)\s+(.+)$", "influence"),
-            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have)\s+)?(requires?|needs?|depends?\s+on|relies?\s+on)\s+(.+)$", "dependency"),
-            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have)\s+)?(supports?|confirms?|contradicts?|challenges?|undermines?)\s+(.+)$", "epistemic"),
-            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have)\s+)?(visits?|sees?|meets?|calls?|loves?|hates?)\s+(.+)$", "social"),
+            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have|must|can|should)\s+)?(causes?|leads?\s+to|produces?|creates?|triggers?|generates?|enables?|prevents?|blocks?|inhibits?|harms?)\s+(.+)$", "causal"),
+            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have|must|can|should)\s+)?(exploits?|manipulates?|influences?|affects?|impacts?|shapes?|alters?|modifies?)\s+(.+)$", "influence"),
+            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have|must|can|should)\s+)?(requires?|needs?|depends?\s+on|relies?\s+on)\s+(.+)$", "dependency"),
+            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have|must|can|should)\s+)?(supports?|confirms?|contradicts?|challenges?|undermines?)\s+(.+)$", "epistemic"),
+            (r"^(.+?)\s+(?:(will|did|had|was|were|has|have|must|can|should)\s+)?(visits?|sees?|meets?|calls?|loves?|hates?)\s+(.+)$", "social"),
         ]
         for pattern, rel_category in relational_patterns:
             m = re.match(pattern, text, re.IGNORECASE)
@@ -338,11 +466,19 @@ class HIPAIManager:
                 aux = m.group(2)
                 verb = m.group(3).strip()
                 obj = m.group(4).strip()
-                rel_type = verb.upper().replace(" ", "_")
+                # Normalize verb to stem form so 'harms' → 'HARM' matches axioms
+                verb_stem = self._normalize_verb(verb)
+                rel_type = verb_stem.upper().replace(" ", "_")
                 rel_type = "".join(c for c in rel_type if c.isalnum() or c == "_")
 
-                # Tense detection for relations
+                # Tense and Modality detection for relations
                 tense = "present"
+                modality = None
+                if aux:
+                    aux_lower = aux.lower()
+                    if aux_lower in ["must", "can", "should"]:
+                        modality = aux_lower
+                        
                 if re.search(r"\bwill\s+", text, re.IGNORECASE):
                     tense = "future"
                 elif re.search(r"\b(did|had|was|were)\s+", text, re.IGNORECASE) or verb.endswith("ed"):
@@ -355,9 +491,10 @@ class HIPAIManager:
                         Individual(id=obj, name=obj),
                     ],
                     relations=[
-                        Relation(source_id=subject, target_id=obj, relation_type=rel_type, tense=tense)
+                        Relation(source_id=subject, target_id=obj, relation_type=rel_type, tense=tense, modality=modality)
                     ],
-                    tense=tense
+                    tense=tense,
+                    modality=modality
                 )
                 possible_parses.append({
                     "observation": obs, 
@@ -421,10 +558,12 @@ class HIPAIManager:
                     "subject_id": anon_id
                 })
 
+
+
         # ─── Pruning ───
         valid_parses = []
         for parse in possible_parses:
-            if parse["type"] == "relation":
+            if parse["type"] in ["relation", "causal", "influence", "dependency", "epistemic", "social"]:
                 obs = parse["observation"]
                 is_valid = True
                 for rel in obs.relations:
@@ -436,7 +575,7 @@ class HIPAIManager:
                 if is_valid:
                     valid_parses.append(parse)
             else:
-                # For now, we assume property assignments and universal beliefs are valid.
+                # For now, we assume property assignments, universal beliefs, and attitudes are valid.
                 # Contradiction detection for properties happens during incorporation.
                 valid_parses.append(parse)
 
@@ -444,54 +583,68 @@ class HIPAIManager:
         if len(valid_parses) > 1:
             raise AmbiguityDetectedError(valid_parses)
 
+        # Fallback to LLM extraction if no simple pattern matches
+        if not possible_parses:
+            if incorporate:
+                self.logger.warning(f"No patterns matched '{text}', falling back to LLM.")
+                # Implement LLM extraction later
+            return {"status": "error", "message": "Failed to parse text."}
+
+        # If we have exactly one valid parse, commit it
         if len(valid_parses) == 1:
             parse = valid_parses[0]
-            if parse["observation"]:
+            if incorporate and parse["observation"]:
                 self.world_model.incorporate_observation(parse["observation"])
             
-            # Handle special metadata logic (e.g., universal beliefs or concepts)
-            if parse["type"] == "class_membership":
-                cypher = """
-                MATCH (e:Entity {id: $subject})
-                MERGE (c:Concept {name: $concept_name})
-                MERGE (e)-[:INSTANCE_OF]->(c)
-                """
-                self.world_model.query_graph(
-                    cypher, {
-                        "subject": parse["observation"].individuals[0].id, 
-                        "concept_name": parse["concept_name"]
-                    }
-                )
-            elif parse["type"] == "universal_belief":
-                self.world_model.create_structure_note(parse["concept_name"], [])
-                q = (
-                    f"MATCH (c:Concept {{name: '{parse['concept_name']}'}}) "
-                    f"SET c.{parse['property_key']} = true"
-                )
-                self.world_model.query_graph(q)
-            elif parse["type"] == "negative_universal_belief":
-                self.world_model.create_structure_note(parse["concept_name"], [])
-                q = (
-                    f"MATCH (c:Concept {{name: '{parse['concept_name']}'}}) "
-                    f"SET c.{parse['property_key']} = true"
-                )
-                self.world_model.query_graph(q)
-            elif parse["type"] == "existential_belief":
-                # Create anonymous individual and link to concept
-                self.world_model.incorporate_observation(parse["observation"])
-                cypher = """
-                MATCH (e:Entity {id: $subject})
-                MERGE (c:Concept {name: $concept_name})
-                MERGE (e)-[:INSTANCE_OF]->(c)
-                """
-                self.world_model.query_graph(
-                    cypher, {
-                        "subject": parse["subject_id"], 
-                        "concept_name": parse["concept_name"]
-                    }
-                )
+            if incorporate:
+                # Handle special metadata logic (e.g., universal beliefs or concepts)
+                if parse["type"] == "class_membership":
+                    cypher = """
+                    MATCH (e:Entity {id: $subject})
+                    MERGE (c:Concept {name: $concept_name})
+                    MERGE (e)-[:INSTANCE_OF]->(c)
+                    """
+                    self.world_model.query_graph(
+                        cypher, {
+                            "subject": parse["observation"].individuals[0].id, 
+                            "concept_name": parse["concept_name"]
+                        }
+                    )
+                elif parse["type"] == "universal_belief":
+                    self.world_model.create_structure_note(parse["concept_name"], [])
+                    q = (
+                        f"MATCH (c:Concept {{name: '{parse['concept_name']}'}}) "
+                        f"SET c.{parse['property_key']} = true"
+                    )
+                    self.world_model.query_graph(q)
+                elif parse["type"] == "negative_universal_belief":
+                    self.world_model.create_structure_note(parse["concept_name"], [])
+                    q = (
+                        f"MATCH (c:Concept {{name: '{parse['concept_name']}'}}) "
+                        f"SET c.{parse['property_key']} = true"
+                    )
+                    self.world_model.query_graph(q)
+                elif parse["type"] == "existential_belief":
+                    # Create anonymous individual and link to concept
+                    self.world_model.incorporate_observation(parse["observation"])
+                    cypher = """
+                    MATCH (e:Entity {id: $subject})
+                    MERGE (c:Concept {name: $concept_name})
+                    MERGE (e)-[:INSTANCE_OF]->(c)
+                    """
+                    self.world_model.query_graph(
+                        cypher, {
+                            "subject": parse["subject_id"], 
+                            "concept_name": parse["concept_name"]
+                        }
+                    )
 
-            return {"status": "success", "message": f"Added belief: {text}"}
+            return {
+                "status": "success", 
+                "message": f"Added belief: {text}",
+                "observation": parse["observation"],
+                "parse": parse
+            }
 
         # ─── Fallback: store as free-text entity ───
 
@@ -506,9 +659,13 @@ class HIPAIManager:
             ],
             relations=[],
         )
-        self.world_model.incorporate_observation(obs)
-        return {"status": "success",
-                "message": f"Added as unstructured belief (no pattern matched): {text}"}
+        if incorporate:
+            self.world_model.incorporate_observation(obs)
+        return {
+            "status": "success",
+            "message": f"Added as unstructured belief (no pattern matched): {text}",
+            "observation": obs
+        }
 
 
     def get_current_state(self) -> dict:
@@ -536,266 +693,148 @@ class HIPAIManager:
 
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
         """
-        Evaluate a hypothesis against the intensional and extensional knowledge.
-        Supports both Entities (Content Nodes) and Concepts (Structure Notes).
+        Evaluates a hypothesis text against the semantic graph.
+        Returns: { 'entailment': 'Entailed' | 'Contradicted' | 'Undetermined', 'evidence': str, 'logical_form': str }
         """
-        hypothesis = hypothesis.strip(".")
-
-        # 1. Normalize the property and identify if it's a negation.
-        is_negative = False
-        subject = None
-        obj = None
-
-        if " is not " in hypothesis:
-            subject, obj = hypothesis.split(" is not ", 1)
-            is_negative = True
-        elif " is " in hypothesis:
-            subject, obj = hypothesis.split(" is ", 1)
-        elif " are not " in hypothesis:
-            subject, obj = hypothesis.split(" are not ", 1)
-            is_negative = True
-        elif " are " in hypothesis:
-            subject, obj = hypothesis.split(" are ", 1)
-        elif " has " in hypothesis:
-            subject, obj = hypothesis.split(" has ", 1)
-        elif " have " in hypothesis:
-            subject, obj = hypothesis.split(" have ", 1)
-
-        # Relational verb fallback — check for relation in graph
-        if subject is None:
-            import re
-            rel_match = re.match(
-                r"^(.+?)\s+(causes?|leads?\s+to|produces?|exploits?|"
-                r"prevents?|supports?|contradicts?|affects?|influences?)\s+(.+)$",
-                hypothesis, re.IGNORECASE,
-            )
-            if rel_match:
-                subject = rel_match.group(1).strip()
-                verb = rel_match.group(2).strip().upper().replace(" ", "_")
-                verb = "".join(c for c in verb if c.isalnum() or c == "_")
-                target = rel_match.group(3).strip()
-                # Check if this relation exists in the graph
-                q_rel = f"""
-                MATCH (a:Entity)-[r:{verb}]->(b:Entity)
-                WHERE (a.id = $subject OR a.name = $subject)
-                AND (b.id = $target OR b.name = $target)
-                RETURN a.name, type(r), b.name
-                """
-                res_rel = self.world_model.query_graph(
-                    q_rel, {"subject": subject, "target": target}
-                )
-                if res_rel:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "Entailed",
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"Relation {verb} from '{subject}' to '{target}' "
-                            f"found in graph."
-                        ),
-                    }
-                # Try semantic search as fallback
-                hits = self.world_model.semantic_search(hypothesis, top_k=3, threshold=0.8)
-                if hits:
-                    return {
-                        "hypothesis": hypothesis,
-                        "entailment": "Undetermined",
-                        "confidence": 0.3,
-                        "reasoning": (
-                            f"No direct relation found, but semantic search "
-                            f"found {len(hits)} related nodes: "
-                            f"{[h.get('content', '') for h in hits[:3]]}"
-                        ),
-                    }
-                return {
-                    "hypothesis": hypothesis,
-                    "entailment": "Undetermined",
-                    "confidence": 0.0,
-                    "reasoning": (
-                        f"No info found about '{hypothesis}' in the knowledge graph. "
-                        f"Try adding relevant beliefs first with add_belief."
-                    ),
-                }
-
-        if subject is None:
-            # Last resort: semantic search
-            hits = self.world_model.semantic_search(hypothesis, top_k=3, threshold=0.8)
-            if hits:
-                return {
-                    "hypothesis": hypothesis,
-                    "entailment": "Undetermined",
-                    "confidence": 0.3,
-                    "reasoning": (
-                        f"Could not parse hypothesis structure, but semantic search "
-                        f"found {len(hits)} related nodes: "
-                        f"{[h.get('content', '') for h in hits[:3]]}"
-                    ),
-                }
+        # Parse the hypothesis without incorporating it
+        parse_res = self.add_belief(hypothesis, incorporate=False)
+        if parse_res.get("status") != "success" or not parse_res.get("observation"):
             return {
-                "hypothesis": hypothesis,
                 "entailment": "Undetermined",
-                "confidence": 0.0,
-                "reasoning": (
-                    f"Could not parse hypothesis and no related nodes found. "
-                    f"Try phrasing as 'X is Y', 'X has Y', 'X causes Y', "
-                    f"or add relevant beliefs first."
-                ),
+                "evidence": "Failed to parse hypothesis.",
+                "logical_form": "Unknown"
             }
-
-        subject = subject.strip()
-        obj = obj.strip()
-
-        # 2. Check if the subject is epistemically contested
-        q_contested = """
-        MATCH (n:Entity)
-        WHERE n.id = $subject OR n.name = $subject
-        RETURN n.epistemically_contested AS contested
-        """
-        res_c = self.world_model.query_graph(q_contested, {"subject": subject})
-        if res_c and res_c[0][0] is True:
+            
+        parse = parse_res["parse"]
+        obs = parse["observation"]
+        ptype = parse["type"]
+        
+        # Determine the target entity and property/relation we are checking
+        if ptype in ["property_assignment", "class_membership", "property", "negative_property"]:
+            subj_id = obs.individuals[0].id
+            prop = list(obs.individuals[0].properties.keys())[0] if isinstance(obs.individuals[0].properties, dict) else obs.individuals[0].properties[0]
+            
+            # Replace spaces and hyphens with underscores
+            prop_sanitized = prop.replace(" ", "_").replace("-", "_")
+            prop_sanitized = "".join(c for c in prop_sanitized if c.isalnum() or c == "_")
+            if prop_sanitized.startswith("not_"):
+                prop_sanitized = prop_sanitized[4:]
+            
+            # Direct check for the property
+            q = (
+                "MATCH (n:Entity {id: $id}) "
+                f"RETURN n.prop_{prop_sanitized} AS has_pos, n.prop_not_{prop_sanitized} AS has_neg"
+            )
+            res = self.world_model.graph.query(q, params={"id": subj_id})
+            
+            has_pos = False
+            has_neg = False
+            if res.result_set:
+                has_pos = res.result_set[0][0] is True
+                has_neg = res.result_set[0][1] is True
+                
+            if has_pos:
+                return {
+                    "entailment": "Entailed" if ptype != "negative_property" else "Contradicted",
+                    "evidence": f"Found direct evidence for property {prop} on {subj_id}.",
+                    "logical_form": f"{prop}({subj_id})"
+                }
+            elif has_neg:
+                return {
+                    "entailment": "Contradicted" if ptype != "negative_property" else "Entailed",
+                    "evidence": f"Found contradictory evidence for property {prop} on {subj_id}.",
+                    "logical_form": f"NOT {prop}({subj_id})"
+                }
+                
+            # Syllogistic subsumption check
+            if ptype == "class_membership":
+                concept = parse.get("concept_name", f"Concept_{prop.capitalize()}")
+                q_sub = (
+                    "MATCH (n:Entity {id: $id})-[:INSTANCE_OF]->(c:Concept) "
+                    "RETURN c.name"
+                )
+                res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
+                if res_sub.result_set:
+                    ancestors = [row[0] for row in res_sub.result_set]
+                    if concept in ancestors:
+                        return {
+                            "entailment": "Entailed",
+                            "evidence": f"Subsumption found: {subj_id} is instance of {concept}.",
+                            "logical_form": f"{concept}({subj_id})"
+                        }
+            elif ptype in ["property", "negative_property", "property_assignment"]:
+                q_sub = (
+                    "MATCH (n:Entity {id: $id})-[:INSTANCE_OF]->(c:Concept) "
+                    f"RETURN c.prop_{prop_sanitized} AS has_pos, c.prop_not_{prop_sanitized} AS has_neg"
+                )
+                res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
+                if res_sub.result_set:
+                    for row in res_sub.result_set:
+                        if row[0] is True:
+                            return {
+                                "entailment": "Entailed" if ptype != "negative_property" else "Contradicted",
+                                "evidence": f"Subsumption found: {subj_id} is instance of concept with property {prop_sanitized}.",
+                                "logical_form": f"{prop_sanitized}({subj_id})"
+                            }
+                        elif row[1] is True:
+                            return {
+                                "entailment": "Contradicted" if ptype != "negative_property" else "Entailed",
+                                "evidence": f"Subsumption found: {subj_id} is instance of concept with negative property {prop_sanitized}.",
+                                "logical_form": f"NOT {prop_sanitized}({subj_id})"
+                            }
+            
             return {
-                "hypothesis": hypothesis,
-                "entailment": "Contested",
-                "confidence": 0.5,
-                "reasoning": f"Properties for {subject} are epistemically contested.",
+                "entailment": "Undetermined",
+                "evidence": f"No direct or subsumptive evidence for property {prop} on {subj_id}.",
+                "logical_form": f"? {prop}({subj_id})"
             }
-
-        # 3. Sanitize the property for Cypher key usage
-        prop_sanitized = "".join(
-            c
-            for c in obj.replace(" ", "_").replace("-", "_")
-            if c.isalnum() or c == "_"
-        )
-
-        # 4. Hybrid Search: Direct Entity Property + Concept Inheritance
-        q_logic = f"""
-        MATCH (n:Entity)
-        WHERE n.id = $subject OR n.name = $subject
-        OPTIONAL MATCH (n)-[:INSTANCE_OF]->(c:Concept)
-        RETURN n.prop_{prop_sanitized} as direct_pos,
-               n.prop_not_{prop_sanitized} as direct_neg,
-               collect(c.prop_{prop_sanitized}) as concept_pos,
-               collect(c.prop_not_{prop_sanitized}) as concept_neg
-        """
-        res = self.world_model.query_graph(q_logic, {"subject": subject})
-
-        entailment = "Undetermined"
-        confidence = 0.0
-        reasoning = (
-            f"No info found about '{obj}' for {subject} "
-            "in Content Nodes or Structure Notes."
-        )
-
-        if res:
-            row = res[0]
-            direct_pos = row[0]
-            direct_neg = row[1]
-            concept_pos = [p for p in row[2] if p is not None]
-            concept_neg = [p for p in row[3] if p is not None]
-
-            # Evidence for the positive property
-            has_pos = direct_pos is True or any(concept_pos)
-            # Evidence for the negative property (not X)
-            has_neg = direct_neg is True or any(concept_neg)
-
-            # Contradiction check
-            if has_pos and has_neg:
-                entailment = "Contested"
-                confidence = 0.5
-                reasoning = (
-                    f"Contradictory evidence: both '{obj}' and 'not {obj}' "
-                    f"present for {subject}."
-                )
-            elif is_negative:
-                # Hypothesis is "is not X"
-                if has_neg:
-                    entailment = "Entailed"
-                    confidence = 1.0
-                    reasoning = f"Found '{obj}' in negative state for {subject}."
-                elif has_pos:
-                    entailment = "Denied"
-                    confidence = 1.0
-                    reasoning = f"Found '{obj}' in positive state, contradicts notion."
-            else:
-                # Hypothesis is "is X"
-                if has_pos:
-                    entailment = "Entailed"
-                    confidence = 1.0
-                    reasoning = (
-                        f"Found '{obj}' for {subject} via direct/inherited props."
-                    )
-                elif has_neg:
-                    entailment = "Denied"
-                    confidence = 1.0
-                    reasoning = f"Found 'not {obj}' for {subject}, contradicts notion."
-
-        # 5. Final Fallback: Check for relations
-        if entailment == "Undetermined":
-            prop_upper = "".join(
-                c for c in obj.upper().replace(" ", "_") if c.isalnum() or c == "_"
+            
+        elif ptype == "relation":
+            rel = obs.relations[0]
+            
+            # Check for exactly this relation
+            q = (
+                f"MATCH (a:Entity {{id: $src}})-[r:{rel.relation_type}]->(b:Entity {{id: $tgt}}) "
+                "RETURN r.modality, r.truth_value"
             )
-            q_rel = (
-                "MATCH (n:Entity)-[r]->(m:Entity) "
-                "WHERE (n.id = $subject OR n.name = $subject) "
-                "RETURN n.id, n.name, type(r), m.id, m.name"
-            )
-            res_rel = self.world_model.query_graph(
-                q_rel, {"subject": subject, "prop_upper": prop_upper}
-            )
-            if res_rel:
-                entailment = "Entailed" if not is_negative else "Denied"
-                confidence = 1.0
-                reasoning = (
-                    f"Found relation {prop_upper} from {subject} "
-                    f"to {res_rel[0][0]}."
-                )
-
-        # 6. Forward chaining: entity has prop_X → find Concept_X → check prop_Y
-        # Resolves transitive syllogisms: "All Xs are Ys" + "A is X" → "A is Y"
-        if entailment == "Undetermined" and not is_negative:
-            q_entity_keys = """
-            MATCH (n:Entity)
-            WHERE n.id = $subject OR n.name = $subject
-            RETURN keys(n) AS entity_keys
-            """
-            res_keys = self.world_model.query_graph(q_entity_keys, {"subject": subject})
-            if res_keys and res_keys[0][0]:
-                entity_keys = res_keys[0][0]
-                # Collect positive membership properties (prop_X where value=true)
-                membership_props = [
-                    k[5:]
-                    for k in entity_keys
-                    if k.startswith("prop_") and not k.startswith("prop_not_")
-                ]
-                for membership in membership_props:
-                    # Concept name: Concept_{Membership.capitalize()}
-                    concept_fragment = membership.capitalize()
-                    q_chain = f"""
-                    MATCH (c:Concept)
-                    WHERE c.name CONTAINS $concept_fragment
-                    AND c.prop_{prop_sanitized} IS NOT NULL
-                    RETURN c.name
-                    """
-                    res_chain = self.world_model.query_graph(
-                        q_chain, {"concept_fragment": concept_fragment}
-                    )
-                    if res_chain:
-                        entailment = "Entailed"
-                        confidence = 1.0
-                        reasoning = (
-                            f"Forward chain: {subject} is {membership} → "
-                            f"Concept_{concept_fragment} implies {obj} "
-                            f"(via {res_chain[0][0]})."
-                        )
-                        break
+            res = self.world_model.graph.query(q, params={"src": rel.source_id, "tgt": rel.target_id})
+            
+            if res.result_set:
+                for row in res.result_set:
+                    modality = row[0]
+                    tv = row[1]
+                    
+                    if tv == 0:
+                        return {
+                            "entailment": "Contradicted",
+                            "evidence": f"Found negative relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
+                            "logical_form": f"NOT {rel.relation_type}({rel.source_id}, {rel.target_id})"
+                        }
+                    
+                    if modality == "can" and not rel.modality:
+                        return {
+                            "entailment": "Undetermined",
+                            "evidence": f"Found possibility ('can') relation, but hypothesis asserts actuality.",
+                            "logical_form": f"? {rel.relation_type}({rel.source_id}, {rel.target_id})"
+                        }
+                        
+                    return {
+                        "entailment": "Entailed",
+                        "evidence": f"Found relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
+                        "logical_form": f"{rel.relation_type}({rel.source_id}, {rel.target_id})"
+                    }
+                    
+            return {
+                "entailment": "Undetermined",
+                "evidence": f"No evidence for relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
+                "logical_form": f"? {rel.relation_type}({rel.source_id}, {rel.target_id})"
+            }
 
         return {
-            "hypothesis": hypothesis,
-            "entailment": entailment,
-            "confidence": confidence,
-            "reasoning": reasoning,
+            "entailment": "Undetermined",
+            "evidence": "Unsupported hypothesis type.",
+            "logical_form": "Unknown"
         }
-
     # ==========================================
     # Paraclete Protocol — T1 Constraint Layer
     # ==========================================
