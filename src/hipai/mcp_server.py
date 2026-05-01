@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from hipai.models import DeontologicalAxiom, Observation
 from hipai.synthesis import HIPAIManager
+from hipai.exceptions import AmbiguityDetectedError
 
 # Initialize FastMCP Server
 mcp = FastMCP("HiPAI Server")
@@ -25,8 +26,36 @@ async def add_belief(text: str) -> str:
     try:
         res = hi_pai.add_belief(text)
         return json.dumps(res, indent=2)
+    except AmbiguityDetectedError as e:
+        options = []
+        for i, p in enumerate(e.possible_parses):
+            p_type = p.get("type", "unknown").replace("_", " ").capitalize()
+            if p.get("rel_type"):
+                obs = p.get("observation")
+                if obs and obs.individuals:
+                    subj = obs.individuals[0].name
+                    obj = obs.individuals[1].name if len(obs.individuals) > 1 else "something"
+                    desc = f"Relation: {subj} -[{p['rel_type']}]-> {obj}"
+                else:
+                    desc = f"Relation: {p['rel_type']}"
+            elif p.get("concept_name"):
+                desc = f"Concept Membership: {p['concept_name']}"
+            elif p.get("observation") and p["observation"].individuals:
+                ind = p["observation"].individuals[0]
+                prop = ind.properties[0] if ind.properties else "unknown"
+                desc = f"Property: {ind.name} has property '{prop}'"
+            else:
+                desc = f"Interpretation: {p_type}"
+            options.append(f"Option {i+1}: {desc}")
+
+        return (
+            f"AmbiguityDetected: The statement '{text}' is ambiguous. "
+            "Please call the tool again specifying your exact intent from these options:\n"
+            + "\n".join(options)
+        )
     except Exception as e:
         return f"Error adding belief: {e!s}"
+
 
 
 @mcp.tool()

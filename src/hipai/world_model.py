@@ -86,7 +86,8 @@ class WorldModel:
         obs_query = """
         MERGE (o:EpistemicNode:Observation {event_id: $event_id})
         SET o.text_source = $text_source,
-            o.timestamp = $timestamp
+            o.timestamp = $timestamp,
+            o.tense = $tense
         """
         import datetime
 
@@ -96,6 +97,7 @@ class WorldModel:
                 "event_id": obs.event_id,
                 "text_source": obs.text_source,
                 "timestamp": datetime.datetime.now().isoformat(),
+                "tense": obs.tense,
             },
         )
 
@@ -181,11 +183,17 @@ class WorldModel:
             MERGE (a)-[r:{rel_type}]->(b)
             SET r.truth_value = COALESCE(r.truth_value, 1),
                 r.epistemic_state = 'asserted',
-                r.event_id = $event_id
+                r.event_id = $event_id,
+                r.tense = $tense
             """
             self.graph.query(
                 query,
-                params={"source": source, "target": target, "event_id": obs.event_id},
+                params={
+                    "source": source, 
+                    "target": target, 
+                    "event_id": obs.event_id,
+                    "tense": relation.tense
+                },
             )
 
     def query_graph(self, cypher: str, params: dict | None = None) -> list[dict]:

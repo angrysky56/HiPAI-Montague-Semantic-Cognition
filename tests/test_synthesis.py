@@ -36,9 +36,36 @@ def test_synthesis():
     print(f"Confidence: {result['confidence']}")
     print(f"Reasoning: {result['reasoning']}")
 
-    assert result["entailment"] == "True"
+    assert result["entailment"] == "Entailed"
     print("[!] Test passed!")
+
+
+
+def test_tense_parsing():
+    manager = HIPAIManager(graph_name="test_tense")
+    manager.world_model.clear_graph()
+
+    # Test past tense
+    manager.add_belief("Socrates was a man")
+    # Verify the observation node has tense="past"
+    res = manager.world_model.query_graph("MATCH (o) WHERE o.text_source CONTAINS 'Socrates' RETURN labels(o), o.tense")
+    print(f"DEBUG: Tense parsing result: {res}")
+    assert any("past" in str(row) for row in res)
+
+    # Test future tense relation
+    manager.add_belief("Alice will visit Bob")
+    # Verify the edge has tense="future"
+    res_edge = manager.world_model.query_graph("MATCH (a:Entity {id: 'Alice'})-[r:VISIT]->(b:Entity {id: 'Bob'}) RETURN r.tense")
+    assert res_edge[0][0] == "future"
+
+    # Test present tense (default)
+    manager.add_belief("Plato is a philosopher")
+    res_pres = manager.world_model.query_graph("MATCH (o:Observation {text_source: 'Plato is a philosopher'}) RETURN o.tense")
+    assert res_pres[0][0] == "present"
+
+    print("[!] Tense parsing test passed!")
 
 
 if __name__ == "__main__":
     test_synthesis()
+    test_tense_parsing()

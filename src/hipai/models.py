@@ -56,6 +56,9 @@ class Relation(BaseModel):
     relation_type: str = Field(
         ..., description="Type of the relation, e.g., 'Loves', 'Kills'."
     )
+    tense: Literal["past", "present", "future"] = Field(
+        default="present", description="The temporal context of the relation."
+    )
 
 
 class TruthValue(BaseModel):
@@ -84,6 +87,9 @@ class Observation(BaseModel):
     )
     relations: list[Relation] = Field(
         default_factory=list, description="Extracted relations between individuals."
+    )
+    tense: Literal["past", "present", "future"] = Field(
+        default="present", description="The temporal context of the overall observation."
     )
 
 
