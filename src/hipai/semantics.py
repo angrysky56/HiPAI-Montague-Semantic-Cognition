@@ -18,7 +18,7 @@ A simple lambda calculus evaluator and type-driven compositional semantic engine
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from hipai.models import Observation
 
@@ -72,15 +72,12 @@ class LambdaExpression:
 
     def apply(self, arg: "LambdaExpression") -> "LambdaExpression":
         """Applies this lambda expression to another expression as an argument."""
-        func_type = self.expr_type
-        if not isinstance(func_type, ComplexType):
-            raise TypeError(f"Cannot apply non-function type {func_type}")
+        if not isinstance(self.expr_type, ComplexType):
+            raise TypeError(f"Cannot apply non-function type {self.expr_type}")
 
-        func_type = cast(ComplexType, func_type)
-
-        # Capture narrowed members to avoid type checker confusion after function calls
-        domain = func_type.domain
-        codomain = func_type.codomain
+        # At this point, self.expr_type is narrowed to ComplexType for the linter
+        domain = self.expr_type.domain
+        codomain = self.expr_type.codomain
 
         if domain != arg.expr_type:
             raise TypeError(f"Type mismatch: expected {domain}, got {arg.expr_type}")

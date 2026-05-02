@@ -63,7 +63,8 @@ class Relation(BaseModel):
         default=None, description="Optional modal necessity/possibility."
     )
     is_factive: bool = Field(
-        default=False, description="Whether the relation entails the truth of its complement."
+        default=False,
+        description="Whether the relation entails the truth of its complement.",
     )
 
 
@@ -95,13 +96,15 @@ class Observation(BaseModel):
         default_factory=list, description="Extracted relations between individuals."
     )
     tense: Literal["past", "present", "future"] = Field(
-        default="present", description="The temporal context of the overall observation."
+        default="present",
+        description="The temporal context of the overall observation.",
     )
     modality: Literal["must", "can", "may", "should"] | None = Field(
         default=None, description="Optional modal necessity/possibility."
     )
     subject_id: str | None = Field(
-        default=None, description="The ID of the subject entity holding this attitude (for nested observations)."
+        default=None,
+        description="The ID of the subject entity holding this attitude (for nested observations).",
     )
 
 

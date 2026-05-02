@@ -1,5 +1,5 @@
-from hipai.synthesis import HIPAIManager
 from hipai.exceptions import AmbiguityDetectedError
+from hipai.synthesis import HIPAIManager
 
 manager = HIPAIManager(graph_name="debug_ambiguity")
 manager.world_model.clear_graph()

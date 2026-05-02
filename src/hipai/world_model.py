@@ -195,8 +195,8 @@ class WorldModel:
             self.graph.query(
                 query,
                 params={
-                    "source": source, 
-                    "target": target, 
+                    "source": source,
+                    "target": target,
                     "event_id": obs.event_id,
                     "tense": relation.tense,
                     "modality": relation.modality,
@@ -627,17 +627,16 @@ class WorldModel:
             )
 
         # 3. INHERITANCE_CHAIN: verify intermediate entities in chain are valid
-        q_chain = f"""
+        q_chain = """
         MATCH (n:Entity)
         WHERE n.id = $object_id OR n.name = $object_id
         RETURN keys(n) AS entity_keys
         """
-        key_rows = self.graph.query(
-            q_chain, params={"object_id": object_id}
-        ).result_set
+        key_rows = self.graph.query(q_chain, params={"object_id": object_id}).result_set
         if key_rows and key_rows[0][0]:
             membership_props = [
-                k[5:] for k in key_rows[0][0]
+                k[5:]
+                for k in key_rows[0][0]
                 if k.startswith("prop_") and not k.startswith("prop_not_")
             ]
             for membership in membership_props:
@@ -762,7 +761,8 @@ class WorldModel:
 
         protected_type = axiom_rows[0][0]
         obj_type_sanitized = "".join(
-            c for c in protected_type.replace(" ", "_").replace("-", "_")
+            c
+            for c in protected_type.replace(" ", "_").replace("-", "_")
             if c.isalnum() or c == "_"
         )
 
@@ -782,16 +782,17 @@ class WorldModel:
                 ec.relation = $relation,
                 ec.detected_at = timestamp()
             """
-            self.graph.query(q_conflict, params={
-                "conflict_id": conflict_id,
-                "object_id": object_id,
-                "protected_type": protected_type,
-                "blocking_axiom": blocking_axiom,
-                "relation": relation,
-            })
-            resolution_log.append(
-                f"EpistemicConflict node logged: {conflict_id}"
+            self.graph.query(
+                q_conflict,
+                params={
+                    "conflict_id": conflict_id,
+                    "object_id": object_id,
+                    "protected_type": protected_type,
+                    "blocking_axiom": blocking_axiom,
+                    "relation": relation,
+                },
             )
+            resolution_log.append(f"EpistemicConflict node logged: {conflict_id}")
 
             # Step 2: SEEK_ADDITIONAL_EVIDENCE
             # 2a: Semantic search for independent corroborating evidence
@@ -809,7 +810,8 @@ class WorldModel:
                 ):
                     additional_evidence.append(
                         f"Semantic: '{content[:80]}...'"
-                        if len(content) > 80 else f"Semantic: '{content}'"
+                        if len(content) > 80
+                        else f"Semantic: '{content}'"
                     )
 
             # 2b: Graph traversal — find any independent prop_ confirmation
@@ -877,11 +879,12 @@ class WorldModel:
                 if protected_type.lower() in content.lower():
                     additional_evidence.append(
                         f"Corroboration: '{content[:80]}'"
-                        if len(content) > 80 else f"Corroboration: '{content}'"
+                        if len(content) > 80
+                        else f"Corroboration: '{content}'"
                     )
 
             # 2b: Check for any chain entities that independently confirm status
-            q_chain_corroboration = f"""
+            q_chain_corroboration = """
             MATCH (n:Entity)
             WHERE n.id = $object_id OR n.name = $object_id
             RETURN keys(n) AS entity_keys
@@ -893,7 +896,8 @@ class WorldModel:
             chain_confirmed = False
             if key_rows and key_rows[0][0]:
                 memberships = [
-                    k[5:] for k in key_rows[0][0]
+                    k[5:]
+                    for k in key_rows[0][0]
                     if k.startswith("prop_") and not k.startswith("prop_not_")
                 ]
                 for membership in memberships:

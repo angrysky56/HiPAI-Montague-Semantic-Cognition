@@ -1,5 +1,7 @@
 import pytest
+
 from src.hipai.synthesis import HIPAIManager
+
 
 def test_modal_necessity():
     manager = HIPAIManager(graph_name="test_intensionality")
@@ -10,23 +12,27 @@ def test_modal_necessity():
 
     # Hypothesis should be entailed by modal necessity
     res = manager.evaluate_hypothesis("Socrates is a man")
-    assert res["entailment"] == "Entailed", "Modal necessity (must) should entail the proposition."
+    assert (
+        res["entailment"] == "Entailed"
+    ), "Modal necessity (must) should entail the proposition."
 
     manager.clear_database()
+
 
 def test_modal_can():
     manager = HIPAIManager(graph_name="test_intensionality")
     manager.clear_database()
 
     manager.add_belief("Bob can see Alice.")
-    
-    # "can" does not entail the fact strictly in traditional logic, 
+
+    # "can" does not entail the fact strictly in traditional logic,
     # but the task acceptance criteria says "Bob can see Alice results in a Relation with modality='can'."
     # For evaluate_hypothesis, the prompt didn't say 'can' entails it. Only 'must' and 'know' entail.
     res = manager.evaluate_hypothesis("Bob sees Alice")
     assert res["entailment"] == "Undetermined" or res["entailment"] != "Entailed"
-    
+
     manager.clear_database()
+
 
 def test_factive_attitude():
     manager = HIPAIManager(graph_name="test_intensionality")
@@ -36,9 +42,12 @@ def test_factive_attitude():
     manager.add_belief("Bob knows that the human is mortal.")
 
     res = manager.evaluate_hypothesis("the human is mortal")
-    assert res["entailment"] == "Entailed", "Factive attitude (knows) should entail the proposition."
+    assert (
+        res["entailment"] == "Entailed"
+    ), "Factive attitude (knows) should entail the proposition."
 
     manager.clear_database()
+
 
 def test_nonfactive_attitude():
     manager = HIPAIManager(graph_name="test_intensionality")
@@ -48,6 +57,8 @@ def test_nonfactive_attitude():
     manager.add_belief("Alice believes that the sky is green.")
 
     res = manager.evaluate_hypothesis("The sky is green")
-    assert res["entailment"] == "Undetermined", "Non-factive attitude (believes) should NOT entail the proposition."
+    assert (
+        res["entailment"] == "Undetermined"
+    ), "Non-factive attitude (believes) should NOT entail the proposition."
 
     manager.clear_database()

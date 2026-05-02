@@ -4,9 +4,9 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
+from hipai.exceptions import AmbiguityDetectedError
 from hipai.models import DeontologicalAxiom, Observation
 from hipai.synthesis import HIPAIManager
-from hipai.exceptions import AmbiguityDetectedError
 
 # Initialize FastMCP Server
 mcp = FastMCP("HiPAI Server")
@@ -25,7 +25,11 @@ async def add_belief(text: str) -> str:
     'Hunter-gatherers have low obesity rates'."""
     try:
         res = hi_pai.add_belief(text)
-        return json.dumps(res, indent=2, default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x))
+        return json.dumps(
+            res,
+            indent=2,
+            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+        )
     except AmbiguityDetectedError as e:
         options = []
         for i, p in enumerate(e.possible_parses):
@@ -34,7 +38,11 @@ async def add_belief(text: str) -> str:
                 obs = p.get("observation")
                 if obs and obs.individuals:
                     subj = obs.individuals[0].name
-                    obj = obs.individuals[1].name if len(obs.individuals) > 1 else "something"
+                    obj = (
+                        obs.individuals[1].name
+                        if len(obs.individuals) > 1
+                        else "something"
+                    )
                     desc = f"Relation: {subj} -[{p['rel_type']}]-> {obj}"
                 else:
                     desc = f"Relation: {p['rel_type']}"
@@ -55,7 +63,6 @@ async def add_belief(text: str) -> str:
         )
     except Exception as e:
         return f"Error adding belief: {e!s}"
-
 
 
 @mcp.tool()
@@ -79,7 +86,11 @@ async def query_graph(cypher: str) -> str:
     """Executes a Cypher query against the HiPAI Graph Database (World Model)."""
     try:
         results = hi_pai.world_model.query_graph(cypher)
-        return json.dumps(results, indent=2, default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x))
+        return json.dumps(
+            results,
+            indent=2,
+            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+        )
     except Exception as e:
         return f"Error executing query: {e!s}"
 
@@ -166,7 +177,11 @@ async def semantic_search(
         results = hi_pai.world_model.semantic_search(
             query_text, top_k=top_k, label=label
         )
-        return json.dumps(results, indent=2, default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x))
+        return json.dumps(
+            results,
+            indent=2,
+            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+        )
     except Exception as e:
         return f"Error executing semantic search: {e!s}"
 
@@ -186,7 +201,11 @@ async def get_current_state() -> str:
     """Returns a snapshot of the current state of the World Model (nodes and edges)."""
     try:
         state = hi_pai.get_current_state()
-        return json.dumps(state, indent=2, default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x))
+        return json.dumps(
+            state,
+            indent=2,
+            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+        )
     except Exception as e:
         return f"Error getting state: {e!s}"
 
@@ -225,7 +244,11 @@ async def incorporate_axiom(
             source_axiom=source_axiom,
         )
         res = hi_pai.incorporate_axiom(axiom)
-        return json.dumps(res, indent=2, default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x))
+        return json.dumps(
+            res,
+            indent=2,
+            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+        )
     except Exception as e:
         return f"Error incorporating axiom: {e!s}"
 
@@ -315,9 +338,7 @@ async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -
         disconfirming = res.get("disconfirming_evidence", [])
         source_count = res.get("source_count", 0)
 
-        confirmed_str = (
-            "\n  • ".join(confirmed) if confirmed else "None found"
-        )
+        confirmed_str = "\n  • ".join(confirmed) if confirmed else "None found"
         disconfirming_str = (
             "\n  • ".join(disconfirming) if disconfirming else "None found"
         )
@@ -382,14 +403,12 @@ async def escalate_block(
         path = res.get("resolution_path", "UNKNOWN")
         conservative = res.get("conservative_default", False)
         log_lines = "\n  ".join(res.get("resolution_log", []))
-        evidence_lines = (
-            "\n  • ".join(res.get("new_evidence", []))
-            or "None found"
-        )
+        evidence_lines = "\n  • ".join(res.get("new_evidence", [])) or "None found"
         conservative_str = (
             "\n⚠️  CONSERVATIVE_DEFAULT: Classification unresolved. "
             "Submit new evidence via add_belief or ingest_observation."
-            if conservative else ""
+            if conservative
+            else ""
         )
 
         report = (
