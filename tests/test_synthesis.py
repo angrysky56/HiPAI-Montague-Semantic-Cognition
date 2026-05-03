@@ -1,11 +1,4 @@
-from hipai.synthesis import HIPAIManager
-
-
-def test_synthesis():
-    manager = HIPAIManager(graph_name="Test_Synthesis_Graph")
-
-    manager = HIPAIManager(graph_name="test_synthesis")
-
+def test_synthesis(manager):
     # Clear graph first (optional but good for testing)
     manager.world_model.clear_graph()
 
@@ -22,12 +15,6 @@ def test_synthesis():
     print(f"Total nodes: {len(state.get('nodes', []))}")
     print(f"Total edges: {len(state.get('edges', []))}")
 
-    for node in state.get("nodes", []):
-        print(f"NODE: {node}")
-
-    for edge in state.get("edges", []):
-        print(f"EDGE: [{edge['source']}, {edge['type']}, {edge['target']}]")
-
     # Evaluate hypothesis
     print("[+] Evaluating hypothesis: Socrates is mortal")
     result = manager.evaluate_hypothesis("Socrates is mortal")
@@ -38,9 +25,7 @@ def test_synthesis():
     print("[!] Test passed!")
 
 
-
-def test_tense_parsing():
-    manager = HIPAIManager(graph_name="test_tense")
+def test_tense_parsing(manager):
     manager.world_model.clear_graph()
 
     # Test past tense
@@ -53,7 +38,7 @@ def test_tense_parsing():
     # Test future tense relation
     manager.add_belief("Alice will visit Bob")
     # Verify the edge has tense="future"
-    res_edge = manager.world_model.query_graph("MATCH (a:Entity {id: 'Alice'})-[r:VISIT]->(b:Entity {id: 'Bob'}) RETURN r.tense")
+    res_edge = manager.world_model.query_graph("MATCH (a:Entity {id: 'alice'})-[r:VISIT]->(b:Entity {id: 'bob'}) RETURN r.tense")
     assert res_edge[0][0] == "future"
 
     # Test present tense (default)
@@ -62,8 +47,3 @@ def test_tense_parsing():
     assert res_pres[0][0] == "present"
 
     print("[!] Tense parsing test passed!")
-
-
-if __name__ == "__main__":
-    test_synthesis()
-    test_tense_parsing()

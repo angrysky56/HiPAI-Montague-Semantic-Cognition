@@ -4,21 +4,7 @@ import uuid
 from hipai.synthesis import HIPAIManager
 from hipai.models import Observation, Individual, Relation
 
-@pytest.fixture
-def manager():
-    db_path = f"test_world_{uuid.uuid4()}.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    
-    manager = HIPAIManager(db_path=db_path)
-    yield manager
-    
-    # Cleanup
-    if os.path.exists(db_path):
-        try:
-            os.remove(db_path)
-        except:
-            pass
+
 
 def test_add_belief_basic(manager):
     manager.clear_database()

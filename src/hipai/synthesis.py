@@ -17,9 +17,9 @@ Synthesizer Module
 import logging
 from typing import Any
 
-from .models import DeontologicalAxiom, Observation, Individual, Relation
-from .world_model import WorldModel
+from .models import DeontologicalAxiom, Individual, Observation, Relation
 from .parser import ClaimExtractor
+from .world_model import WorldModel
 
 try:
     import numpy as np
@@ -246,37 +246,59 @@ class HIPAIManager:
         """Standardizer for clearing the model's graph database."""
         self.world_model.clear_database()
 
+    def close(self):
+        """Closes the underlying world model."""
+        self.world_model.close()
+
     def _resolve_ambiguity(self, obs: Observation):
         """
         Hardens the observation by resolving entities against the current World Model.
         If an entity name is ambiguous, it uses semantic search to find the best match.
         """
+        id_map = {}
         for ind in obs.individuals:
+            old_id = ind.id
             # Search for existing entities with similar names
-            results = self.world_model.semantic_search(ind.name, top_k=5, threshold=0.4, label="Entity")
-            
+            results = self.world_model.semantic_search(
+                ind.name, top_k=5, threshold=0.7, label="Entity"
+            )
+
             if results:
                 best = results[0]
                 # Results[0] distance is cosine distance (0.0 means identical)
-                if best["distance"] < 0.2:
+                if best["distance"] < 0.5:
                     # High confidence match, use existing ID
                     if ind.id != best["id"]:
-                        self.logger.debug("Mapping new entity '%s' to existing ID '%s'", ind.name, best["id"])
+                        self.logger.debug(
+                            "Mapping new entity '%s' to existing ID '%s'",
+                            ind.name,
+                            best["id"],
+                        )
                     ind.id = best["id"]
                 elif len(results) > 1:
                     # Multiple candidates, pick best but note ambiguity
                     ind.id = best["id"]
-                    obs.confidence *= 0.9 # Penalty for ambiguity
-                    self.logger.info("Resolved ambiguous entity '%s' to '%s' (dist: %.2f)", 
-                                     ind.name, best["id"], best["distance"])
+                    obs.confidence *= 0.9  # Penalty for ambiguity
+                    self.logger.info(
+                        "Resolved ambiguous entity '%s' to '%s' (dist: %.2f)",
+                        ind.name,
+                        best["id"],
+                        best["distance"],
+                    )
+            id_map[old_id] = ind.id
 
-        # Recursive resolution for attitudes
+        # Update relation IDs
         for rel in obs.relations:
+            if rel.source_id in id_map:
+                rel.source_id = id_map[rel.source_id]
+            if rel.target_id in id_map:
+                rel.target_id = id_map[rel.target_id]
+
+            # Recursive resolution for attitudes
             if rel.target_observation:
                 self._resolve_ambiguity(rel.target_observation)
                 # Propagate lower confidence
                 obs.confidence = min(obs.confidence, rel.target_observation.confidence)
-
 
     def add_belief(self, text: str, incorporate: bool = True) -> dict[str, Any]:
         """
@@ -354,8 +376,8 @@ class HIPAIManager:
 
             # Get all edges
             res_edges = self.world_model.query_graph(
-                "MATCH (a)-[r]->(b) RETURN properties(a).id as source, "
-                "type(r) as type, properties(b).id as target"
+                "MATCH (a)-[r]->(b) RETURN COALESCE(properties(a).id, properties(a).name) as source, "
+                "type(r) as type, COALESCE(properties(b).id, properties(b).name) as target"
             )
             edges = [
                 {"source": r[0], "type": r[1], "target": r[2]}
@@ -367,10 +389,7 @@ class HIPAIManager:
             return {"error": str(e)}
 
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
-        """
-        Evaluates a hypothesis text against the semantic graph.
-        Returns: { 'entailment': 'Entailed' | 'Contradicted' | 'Undetermined', 'evidence': str, 'logical_form': str }
-        """
+        print(f"DEBUG: evaluate_hypothesis called with: {hypothesis}")
         # Parse the hypothesis without incorporating it
         parse_res = self.add_belief(hypothesis, incorporate=False)
         if parse_res.get("status") != "success" or not parse_res.get("observation"):
@@ -384,6 +403,15 @@ class HIPAIManager:
         obs = parse_res["observation"]
         ptype = parse["type"]
 
+        if ptype == "nlp_extracted":
+            if obs.relations:
+                if any(r.relation_type == "IS_A" for r in obs.relations):
+                    ptype = "class_membership"
+                else:
+                    ptype = "relation"
+            elif obs.individuals and obs.individuals[0].properties:
+                ptype = "property"
+
         # Determine the target entity and property/relation we are checking
         if ptype in [
             "property_assignment",
@@ -391,12 +419,35 @@ class HIPAIManager:
             "property",
             "negative_property",
         ]:
+            if not obs.individuals:
+                return {
+                    "entailment": "Undetermined",
+                    "evidence": "No subject found in hypothesis.",
+                }
+
             subj_id = obs.individuals[0].id
-            prop = (
-                next(iter(obs.individuals[0].properties.keys()))
-                if isinstance(obs.individuals[0].properties, dict)
-                else obs.individuals[0].properties[0]
-            )
+            prop = None
+
+            # Check if it's a property on the individual
+            if obs.individuals[0].properties:
+                prop = (
+                    next(iter(obs.individuals[0].properties.keys()))
+                    if isinstance(obs.individuals[0].properties, dict)
+                    else obs.individuals[0].properties[0]
+                )
+            # Check if it's an IS_A relation
+            elif obs.relations:
+                rel = next(
+                    (r for r in obs.relations if r.relation_type == "IS_A"), None
+                )
+                if rel and rel.target_id:
+                    prop = rel.target_id
+
+            if not prop:
+                return {
+                    "entailment": "Undetermined",
+                    "evidence": "No property or class found in hypothesis.",
+                }
 
             # Replace spaces and hyphens with underscores
             prop_sanitized = prop.replace(" ", "_").replace("-", "_")
@@ -411,6 +462,7 @@ class HIPAIManager:
                 "MATCH (n:Entity {id: $id}) "
                 f"RETURN n.prop_{prop_sanitized} AS has_pos, n.prop_not_{prop_sanitized} AS has_neg"
             )
+            print(f"DEBUG: evaluate_hypothesis checking {subj_id} for {prop_sanitized}")
             res = self.world_model.graph.query(q, params={"id": subj_id})
 
             has_pos = False
@@ -454,30 +506,42 @@ class HIPAIManager:
                         }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[:INSTANCE_OF]->(c:Concept) "
-                    f"RETURN c.prop_{prop_sanitized} AS has_pos, c.prop_not_{prop_sanitized} AS has_neg"
+                    "MATCH (n:Entity {id: $id})-[r:INSTANCE_OF]->(c:Concept) "
+                    f"RETURN c.prop_{prop_sanitized} AS has_pos, c.prop_not_{prop_sanitized} AS has_neg, r.modality AS modality"
                 )
                 res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
+                print(f"DEBUG: Subsumption results for {subj_id}: {res_sub.result_set}")
                 if res_sub.result_set:
                     for row in res_sub.result_set:
+                        modality = row[2]
                         if row[0] is True:
+                            if (
+                                modality in ["can", "may", "possible", "might", "could"]
+                                and ptype == "property"
+                            ):
+                                continue
                             return {
                                 "entailment": (
                                     "Entailed"
                                     if ptype != "negative_property"
                                     else "Contradicted"
                                 ),
-                                "evidence": f"Subsumption found: {subj_id} is instance of concept with property {prop_sanitized}.",
+                                "evidence": f"Subsumption found: {subj_id} is instance of concept with property {prop_sanitized} (modality: {modality}).",
                                 "logical_form": f"{prop_sanitized}({subj_id})",
                             }
                         elif row[1] is True:
+                            if (
+                                modality in ["can", "may", "possible", "might", "could"]
+                                and ptype == "property"
+                            ):
+                                continue
                             return {
                                 "entailment": (
                                     "Contradicted"
                                     if ptype != "negative_property"
                                     else "Entailed"
                                 ),
-                                "evidence": f"Subsumption found: {subj_id} is instance of concept with negative property {prop_sanitized}.",
+                                "evidence": f"Subsumption found: {subj_id} is instance of concept with negative property {prop_sanitized} (modality: {modality}).",
                                 "logical_form": f"NOT {prop_sanitized}({subj_id})",
                             }
 
@@ -511,10 +575,13 @@ class HIPAIManager:
                             "logical_form": f"NOT {rel.relation_type}({rel.source_id}, {rel.target_id})",
                         }
 
-                    if modality == "can" and not rel.modality:
+                    if (
+                        modality in ["can", "may", "possible", "might", "could"]
+                        and rel.modality == "assertive"
+                    ):
                         return {
                             "entailment": "Undetermined",
-                            "evidence": f"Found possibility ('can') relation, but hypothesis asserts actuality.",
+                            "evidence": f"Found possibility ('{modality}') relation, but hypothesis asserts actuality.",
                             "logical_form": f"? {rel.relation_type}({rel.source_id}, {rel.target_id})",
                         }
 

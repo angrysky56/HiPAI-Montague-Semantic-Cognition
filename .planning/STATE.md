@@ -1,43 +1,41 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.5-refactor
-milestone_name: v0.5 Refactor
-status: planning
-last_updated: "2026-05-03T09:14:00Z"
+milestone: v0.6-advanced-cognition
+milestone_name: v0.6 Advanced Cognition
+status: implementing
+last_updated: "2026-05-03T11:15:00Z"
 progress:
-  total_phases: 5
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_phases: 7
+  completed_phases: 6
+  total_plans: 24
+  completed_plans: 24
 ---
 
 # Project State
 
 ## Project Reference
 
-See: `DESIGN.md` (v0.5)
+See: `DESIGN.md` (v0.6)
 
-**Core value:** Authoritative OWL reasoning with transaction-per-claim semantics and Neo4j read-model projection.
+**Core value:** Recursive attitude logic and graph-driven entity disambiguation.
+
 ## Current Phase
-**Phase 2: Layer 2 Refactor & API Mirroring**
+**Phase 6: Advanced Cognition (Recursive Logic & Ambiguity)**
 
 ## Status
-**Status:** 🏗️ IMPLEMENTING
-**Progress:** 5%
+**Status:** ✅ COMPLETED (v0.6 Core)
+**Progress:** 95%
 **Last Update:** 2026-05-03
 
 ## Recent Achievements
-- [x] Phase 1: Foundational Substrate completed.
-- [x] spaCy pattern analysis spike completed.
-- [x] Phase 2 Implementation Plan drafted.
+- [x] Phase 6: Advanced Cognition (Recursive Logic & Ambiguity) completed.
+- [x] Implemented recursive attitude extraction (beliefs about beliefs).
+- [x] Implemented hardened ambiguity resolution with semantic similarity.
+- [x] Standardized entity ID handling for compound names (e.g., "Alice Smith").
+- [x] Implemented Cognitive Depth Throttling (Recursion Control).
 
 ## Session Context
 
-**Current objective:** Transition the semantic engine to the new NLP/OWL pipeline.
-**Active phase:** 2
+**Current objective:** Finalize documentation and prepare for v0.7 executive logic.
+**Active phase:** 6
 **Active plan:** None
-
-## Threads
-
-- Completed Spike Campaign (001-004) - VALIDATED.
-- Now starting Phase 1 of the formal v0.5 refactor.

@@ -5,32 +5,37 @@
 ---
 
 ## Phase A: Foundational Substrate (Day 1 Morning)
-1. [ ] **Environment**: Update `pyproject.toml` with `spacy` and `owlready2` dependencies.
-2. [ ] **NLP Init**: Download `en_core_web_md` and verify spaCy load in `src/nlp_engine.py`.
-3. [ ] **OWL Init**: Setup base `world.db` (sqlite) and seed initial T1 axioms (Action, Entity, HARM, etc.).
+1. [x] **Environment**: Update `pyproject.toml` with `spacy` and `owlready2` dependencies.
+2. [x] **NLP Init**: Download `en_core_web_md` and verify spaCy load.
+3. [x] **OWL Init**: Setup base `world.db` (sqlite) and seed initial T1 axioms.
 
 ## Phase B: Layer 2 Refactor (Day 1 Afternoon)
-4. [ ] **Internal Translation**: Replace regex-based `claim_synthesis` with spaCy dependency parsing logic.
-5. [ ] **Authority Shift**: Refactor `world_model` to write to `owlready2` by default.
-6. [ ] **API Mirroring**: 
+4. [x] **Internal Translation**: Replace regex-based `claim_synthesis` with spaCy dependency parsing logic.
+5. [x] **Authority Shift**: Refactor `world_model` to write to `owlready2` by default.
+6. [x] **API Mirroring**: 
     - Maintain existing signatures (`add_belief`, `evaluate_hypothesis`) but wrap the new OWL backend.
-    - Keep `register_agent_state` active for baseline closure_status monitoring.
-7. [ ] **Unit Tests**: Verify the 21-test regression suite passes with the new backend.
+7. [x] **Unit Tests**: Verify the 21-test regression suite passes with the new backend.
 
 ## Phase C: The EBE Pipeline (Day 2 Morning)
-8. [ ] **Snapshot Logic**: Implement `IsolationWorld` context manager for transaction-per-claim semantics.
-9. [ ] **Relaxation Logic**: Implement the diagnostic path for identifying `blocking_axiom` via disjoint-destroy pattern.
-10. [ ] **Error Mapping**: Map `OwlReadyInconsistentOntologyError` to the Paraclete `EBE_Chain` signal.
+8. [x] **Snapshot Logic**: Implement `IsolationWorld` context manager for transaction-per-claim semantics.
+9. [x] **Relaxation Logic**: Implement the diagnostic path for identifying `blocking_axiom` via disjoint-destroy pattern.
+10. [x] **Error Mapping**: Map `OwlReadyInconsistentOntologyError` to the Paraclete `EBE_Chain` signal.
 
 ## Phase D: The Projection Layer (Day 2 Afternoon)
-11. [ ] **Projector**: Implement the OWL → Neo4j projection function (~50 lines).
-12. [ ] **Hierarchy Support**: Ensure `.ancestors()` walk is included for transitive type signal.
-13. [ ] **Idempotency**: Use `MERGE` statements and add a test to verify no duplicate edges on repeated passes.
+11. [x] **Projector**: Implement the OWL → FalkorDB (Neo4j-compatible) projection function.
+12. [x] **Hierarchy Support**: Ensure `.ancestors()` walk is included for transitive type signal.
+13. [x] **Idempotency**: Use `MERGE` statements and verify no duplicate edges.
 
 ## Phase E: Integration & Calibration (Day 3)
-14. [ ] **L1 Integration**: Update Council routing to use the new L2/L3 orthogonal boundaries.
-15. [ ] **UAT**: Run the 50-claim calibration suite (council-generated vs solo).
-16. [ ] **Final Review**: Assert `closure_status` improvement (WEAK -> STRONG).
+14. [x] **L1 Integration**: Update Council routing to use the new L2/L3 orthogonal boundaries.
+15. [x] **UAT**: Run the 50-claim calibration suite.
+16. [x] **Final Review**: Assert `closure_status` improvement (WEAK -> STRONG).
+
+## Phase F: Advanced Cognition (Recursive Logic & Ambiguity)
+17. [x] **Recursive Parsing**: Extract nested observations for attitude verbs (`ccomp` support).
+18. [x] **Graph Recursion**: Link Entities to EpistemicNodes in the projection layer.
+19. [x] **Entity Resolution**: Implement semantic-search disambiguation in the belief pipeline.
+20. [x] **Confidence Propagation**: Propagate resolution quality from individuals to observations.
 
 ---
 

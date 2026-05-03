@@ -1,10 +1,4 @@
-import pytest
-
-from src.hipai.synthesis import HIPAIManager
-
-
-def test_modal_necessity():
-    manager = HIPAIManager(graph_name="test_intensionality")
+def test_modal_necessity(manager):
     manager.clear_database()
 
     # Belief with modal necessity
@@ -16,11 +10,8 @@ def test_modal_necessity():
         res["entailment"] == "Entailed"
     ), "Modal necessity (must) should entail the proposition."
 
-    manager.clear_database()
 
-
-def test_modal_can():
-    manager = HIPAIManager(graph_name="test_intensionality")
+def test_modal_can(manager):
     manager.clear_database()
 
     manager.add_belief("Bob can see Alice.")
@@ -29,13 +20,11 @@ def test_modal_can():
     # but the task acceptance criteria says "Bob can see Alice results in a Relation with modality='can'."
     # For evaluate_hypothesis, the prompt didn't say 'can' entails it. Only 'must' and 'know' entail.
     res = manager.evaluate_hypothesis("Bob sees Alice")
-    assert res["entailment"] == "Undetermined" or res["entailment"] != "Entailed"
+    # "can" is not factive, so it should be Undetermined
+    assert res["entailment"] == "Undetermined"
 
-    manager.clear_database()
 
-
-def test_factive_attitude():
-    manager = HIPAIManager(graph_name="test_intensionality")
+def test_factive_attitude(manager):
     manager.clear_database()
 
     # Factive attitude: Know
@@ -46,11 +35,8 @@ def test_factive_attitude():
         res["entailment"] == "Entailed"
     ), "Factive attitude (knows) should entail the proposition."
 
-    manager.clear_database()
 
-
-def test_nonfactive_attitude():
-    manager = HIPAIManager(graph_name="test_intensionality")
+def test_nonfactive_attitude(manager):
     manager.clear_database()
 
     # Non-factive attitude: Believe
@@ -60,5 +46,3 @@ def test_nonfactive_attitude():
     assert (
         res["entailment"] == "Undetermined"
     ), "Non-factive attitude (believes) should NOT entail the proposition."
-
-    manager.clear_database()

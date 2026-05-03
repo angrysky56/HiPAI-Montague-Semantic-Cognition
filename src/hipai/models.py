@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import uuid
-from typing import Any, Literal, Optional
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
+
 
 class Individual(BaseModel):
     """
@@ -14,6 +17,10 @@ class Individual(BaseModel):
     )
     name: str = Field(
         ..., description="Human-readable name or concept for the individual."
+    )
+    quantifier: Literal["all", "some", "no"] | None = Field(
+        default=None,
+        description="Quantifier associated with this individual (e.g., 'all', 'some', 'no').",
     )
     properties: list[str] | dict[str, Any] = Field(
         default_factory=list,
@@ -43,9 +50,12 @@ class Relation(BaseModel):
     """
 
     source_id: str = Field(..., description="ID of the subject/source individual.")
-    target_id: str | None = Field(default=None, description="ID of the object/target individual.")
-    target_observation: Optional[Observation] = Field(
-        default=None, description="Nested observation for attitude verbs like 'believe'."
+    target_id: str | None = Field(
+        default=None, description="ID of the object/target individual."
+    )
+    target_observation: Observation | None = Field(
+        default=None,
+        description="Nested observation for attitude verbs like 'believe'.",
     )
     relation_type: str = Field(
         ..., description="Type of the relation, e.g., 'Loves', 'Kills'."
@@ -97,7 +107,9 @@ class Observation(BaseModel):
         default="present",
         description="The temporal context of the overall observation.",
     )
-    modality: str = Field(default="assertive", description="Modality of the observation.")
+    modality: str = Field(
+        default="assertive", description="Modality of the observation."
+    )
     subject_id: str | None = Field(
         default=None, description="The primary subject ID of this observation."
     )
@@ -164,5 +176,6 @@ class DeontologicalAxiom(BaseModel):
             "Provides formal provenance."
         ),
     )
+
 
 Observation.model_rebuild()

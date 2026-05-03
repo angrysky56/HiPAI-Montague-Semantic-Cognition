@@ -1,10 +1,10 @@
 # HiPAI Montague Semantic Cognition
 
-### with Paraclete Protocol v0.5 — Authoritative OWL Reasoning
+### with Paraclete Protocol v0.6 — Authoritative OWL Reasoning
 
 A neuro-symbolic cognitive architecture blending Montague grammar semantics,
 authoritative OWL world modeling, and a formally verified ethical constraint system.
-Built on **owlready2 (HermiT)** for reasoning and **Neo4j** for read-model projection.
+Built on **owlready2 (HermiT)** for reasoning and **FalkorDB** for read-model projection.
 
 ---
 
@@ -17,12 +17,13 @@ The system's ethical constraints are not prompts or weights. They are **immutabl
 enforced by a Description Logic (DL) reasoner (HermiT). When the Emergency Brake fires,
 it is a logical necessity of the world model's state, not a probabilistic tendency.
 
-### v0.5 Refactor Core:
+### v0.6 Refactor Core:
 - **Authoritative OWL**: `owlready2` is the source of truth for all beliefs and constraints.
 - **HermiT Reasoner**: Real-time consistency checking and transitive inference.
-- **spaCy Integration**: High-fidelity NLP pipeline for robust claim extraction.
-- **Neo4j Projection**: Success-path projection to Neo4j for Cypher-based retrieval and graph analytics.
-- **Paraclete v0.5**: Ethical gates expressed as `EquivalentTo` restrictions with mandatory disjointness.
+- **Recursive Attitudes**: Support for higher-order beliefs (beliefs about beliefs).
+- **Ambiguity Resolution**: Graph-driven entity linking with semantic similarity.
+- **FalkorDB Projection**: Success-path projection to FalkorDB for high-performance retrieval.
+- **Paraclete v0.6**: Ethical gates expressed as `EquivalentTo` restrictions with mandatory disjointness.
 
 ---
 

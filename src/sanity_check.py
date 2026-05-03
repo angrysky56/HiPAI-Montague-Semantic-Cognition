@@ -1,6 +1,8 @@
-import spacy
-import owlready2
 import sys
+
+import owlready2
+import spacy
+
 
 def main():
     print("Checking spaCy...")
@@ -16,13 +18,17 @@ def main():
     try:
         onto = owlready2.get_ontology("http://test.org/onto.owl")
         with onto:
-            class Man(owlready2.Thing): pass
+
+            class Man(owlready2.Thing):
+                pass
+
         print("owlready2 loaded. Created class 'Man'.")
     except Exception as e:
         print(f"owlready2 failure: {e}")
         sys.exit(1)
 
     print("\nEnvironment Ready.")
+
 
 if __name__ == "__main__":
     main()

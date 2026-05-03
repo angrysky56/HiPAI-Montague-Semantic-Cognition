@@ -3,11 +3,15 @@ import json
 import pytest
 
 from hipai.mcp_server import add_belief, hi_pai
+from hipai.models import DeontologicalAxiom
 
 
 @pytest.fixture(autouse=True)
-def setup_graph():
-    hi_pai.world_model.clear_graph()
+def setup_isolated_db(tmp_path):
+    """Ensure hi_pai uses an isolated database for each test."""
+    # Since hi_pai is global, we clear it.
+    hi_pai.world_model.clear_database()
+    yield
 
 
 @pytest.mark.asyncio
@@ -16,44 +20,42 @@ async def test_mcp_add_belief_success():
     res_str = await add_belief("Socrates is a man")
     res = json.loads(res_str)
     assert res["status"] == "success"
+    # The new parser lowercases IDs
+    assert res["observation"]["individuals"][0]["id"] == "socrates"
 
 
 @pytest.mark.asyncio
-async def test_mcp_ambiguity_response():
-    """Test that MCP server returns the structured AmbiguityDetected string."""
-    # This should trigger multiple patterns as seen in test_ambiguity.py
-    res = await add_belief("Socrates is a teacher who causes trouble")
+async def test_mcp_entity_ambiguity():
+    """Test that MCP server handles entity resolution (Alice -> Alice Smith)."""
+    # 1. Add Alice Smith
+    await add_belief("Alice Smith is a human")
 
-    assert "AmbiguityDetected" in res
-    assert "Option 1" in res
-    assert "Option 2" in res
-    assert "Please call the tool again" in res
+    # 2. Add Alice is happy
+    res_str = await add_belief("Alice is happy")
+    res = json.loads(res_str)
+
+    assert res["status"] == "success"
+    # Should have resolved Alice to alice_smith
+    assert res["observation"]["individuals"][0]["id"] == "alice_smith"
 
 
 @pytest.mark.asyncio
-async def test_mcp_pruning_resolution():
-    """Test that MCP server resolves ambiguity if pruning leaves only one valid parse."""
-    # Seed axiom: Socrates cannot HARM Students
-    from hipai.models import DeontologicalAxiom
-
-    hi_pai.world_model.incorporate_axiom(
+async def test_mcp_constraint_violation():
+    """Test that MCP server returns deontological violations."""
+    hi_pai.incorporate_axiom(
         DeontologicalAxiom(
             tier="T1",
-            subject_type="Socrates",
-            relation_type="HARM",
-            object_type="Student",
+            subject_type="Agent",
+            relation_type="HARMS",
+            object_type="Patient",
             constraint="FORBIDDEN",
             source_axiom="A1",
         )
     )
-    hi_pai.world_model.query_graph(
-        "MERGE (p:Entity {id: 'Plato'}) MERGE (c:Concept {name: 'Concept_Student'}) MERGE (p)-[:INSTANCE_OF]->(c)"
-    )
+    await add_belief("Alice is a patient")
 
-    # Statement: 'Socrates is a teacher who harms Plato'
-    # Parse 1: Property (Valid)
-    # Parse 2: Relation HARM (Invalid)
-    # Should result in success, not AmbiguityDetected
-    res_str = await add_belief("Socrates is a teacher who harms Plato")
+    res_str = await add_belief("Agent harms Alice")
     res = json.loads(res_str)
-    assert res["status"] == "success"
+
+    assert res["status"] == "error"
+    assert "Deontological violation" in res["message"]

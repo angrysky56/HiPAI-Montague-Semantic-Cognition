@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import os
+import uuid
 
 from falkordb import FalkorDB
 from sentence_transformers import SentenceTransformer
@@ -27,7 +28,11 @@ class WorldModel:
     """
 
     def __init__(
-        self, host: str = "localhost", port: int = 6380, graph_name: str = "hipai", db_path: str = "world.db"
+        self,
+        host: str = "localhost",
+        port: int = 6380,
+        graph_name: str = "hipai",
+        db_path: str = "world.db",
     ):
         """Initializes the World Model with a FalkorDB connection."""
         self.host = host
@@ -78,10 +83,14 @@ class WorldModel:
             self.graph.delete()
         self._ensure_graph()
 
+    def close(self):
+        """Closes the world model connections, specifically the ontology."""
+        self.ontology.close()
+
     def _get_embedding(self, text: str) -> list[float]:
         return self.embedding_model.encode(text).tolist()
 
-    def incorporate_observation(self, obs: Observation):
+    def incorporate_observation(self, obs: Observation, is_factive: bool = True):
         r"""
         Maps the $\lambda$-abstraction semantic structures into Graph nodes and edges.
         Includes Epistemological tracking (semantic origins)
@@ -93,7 +102,8 @@ class WorldModel:
             o.timestamp = $timestamp,
             o.tense = $tense,
             o.modality = $modality,
-            o.subject_id = $subject_id
+            o.subject_id = $subject_id,
+            o.is_factive = $is_factive
         """
         import datetime
 
@@ -106,6 +116,7 @@ class WorldModel:
                 "tense": obs.tense,
                 "modality": obs.modality,
                 "subject_id": obs.subject_id,
+                "is_factive": is_factive,
             },
         )
 
@@ -113,23 +124,79 @@ class WorldModel:
         self.ontology.add_observation(obs)
 
         for individual in obs.individuals:
-            # Create or update individual using Tier 1 schema
-            # Link EpistemicNode -> Entity
-            query = """
-            MATCH (o:EpistemicNode:Observation {event_id: $event_id})
-            MERGE (n:ContentNode:Entity {id: $id})
-            MERGE (o)-[:OBSERVED]->(n)
-            SET n.name = $name,
-                n.content = $name,
-                n.embedding = vecf32($embedding)
-            """
-            params = {
-                "id": individual.id,
-                "name": individual.name,
-                "embedding": self._get_embedding(individual.name),
-                "event_id": obs.event_id,
-            }
-            self.graph.query(query, params=params)
+            # Handle quantifiers: Create Concept node for universals
+            if individual.quantifier in ("all", "no"):
+                concept_name = f"Concept_{individual.name.capitalize()}"
+                concept_query = """
+                MATCH (o:EpistemicNode:Observation {event_id: $event_id})
+                MERGE (c:StructureNote:Concept {name: $concept_name})
+                MERGE (o)-[:OBSERVED]->(c)
+                SET c.id = $id
+                """
+                self.graph.query(
+                    concept_query,
+                    params={
+                        "event_id": obs.event_id,
+                        "concept_name": concept_name,
+                        "id": individual.id,
+                    },
+                )
+                target_node_label = "Concept"
+                target_id = individual.id
+            elif individual.quantifier == "some":
+                # Create anonymous entity
+                if not individual.id.startswith("anonymous_"):
+                    individual.id = f"anonymous_{uuid.uuid4().hex[:8]}"
+
+                query = """
+                MATCH (o:EpistemicNode:Observation {event_id: $event_id})
+                MERGE (n:ContentNode:Entity {id: $id})
+                MERGE (o)-[:OBSERVED]->(n)
+                SET n.name = $name,
+                    n.content = $name
+                """
+                self.graph.query(
+                    query,
+                    params={
+                        "id": individual.id,
+                        "name": individual.name,
+                        "event_id": obs.event_id,
+                    },
+                )
+
+                # Link to base concept
+                concept_name = f"Concept_{individual.name.capitalize()}"
+                link_query = """
+                MERGE (c:StructureNote:Concept {name: $concept_name})
+                WITH c
+                MATCH (n:Entity {id: $id})
+                MERGE (n)-[:INSTANCE_OF]->(c)
+                """
+                self.graph.query(
+                    link_query,
+                    params={"concept_name": concept_name, "id": individual.id},
+                )
+                target_node_label = "Entity"
+                target_id = individual.id
+            else:
+                # Regular Entity
+                query = """
+                MATCH (o:EpistemicNode:Observation {event_id: $event_id})
+                MERGE (n:ContentNode:Entity {id: $id})
+                MERGE (o)-[:OBSERVED]->(n)
+                SET n.name = $name,
+                    n.content = $name,
+                    n.embedding = vecf32($embedding)
+                """
+                params = {
+                    "id": individual.id,
+                    "name": individual.name,
+                    "embedding": self._get_embedding(individual.name),
+                    "event_id": obs.event_id,
+                }
+                self.graph.query(query, params=params)
+                target_node_label = "Entity"
+                target_id = individual.id
 
             # Handle property assignments and contradictions
             if individual.properties:
@@ -139,7 +206,6 @@ class WorldModel:
 
                 for prop, val in props_to_process.items():
                     # Replace spaces and hyphens with underscores before sanitizing
-                    # so "hard interrupt" -> "hard_interrupt" not "hardinterrupt"
                     prop_normalized = prop.replace(" ", "_").replace("-", "_")
                     prop_sanitized = "".join(
                         c for c in prop_normalized if c.isalnum() or c == "_"
@@ -148,7 +214,7 @@ class WorldModel:
                     base_prop = prop_sanitized[4:] if is_negation else prop_sanitized
 
                     check_q = (
-                        "MATCH (n:Entity {id: $id}) "
+                        "MATCH (n {id: $id}) "
                         f"RETURN n.prop_{base_prop}, n.prop_not_{base_prop}"
                     )
                     res = self.graph.query(check_q, params={"id": individual.id})
@@ -168,14 +234,17 @@ class WorldModel:
                                 contested = True
 
                     # Update property and contested status
-                    update_q = f"""
-                    MATCH (n:Entity {{id: $id}})
-                    SET n.prop_{prop_sanitized} = $val
-                    """
-                    if contested:
-                        update_q += ", n.epistemically_contested = true"
+                    if is_factive:
+                        update_q = f"""
+                        MATCH (n {{id: $id}})
+                        SET n.prop_{prop_sanitized} = $val
+                        """
+                        if contested:
+                            update_q += ", n.epistemically_contested = true"
 
-                    self.graph.query(update_q, params={"id": individual.id, "val": val})
+                        self.graph.query(
+                            update_q, params={"id": individual.id, "val": val}
+                        )
 
         for relation in obs.relations:
             # relation: <e, <e, t>>
@@ -188,7 +257,9 @@ class WorldModel:
 
             if relation.target_observation:
                 # 1. Incorporate nested observation recursively
-                self.incorporate_observation(relation.target_observation)
+                self.incorporate_observation(
+                    relation.target_observation, is_factive=relation.is_factive
+                )
 
                 # 2. Link Entity -> Observation (Attitude relation)
                 query = f"""
@@ -216,28 +287,61 @@ class WorldModel:
             elif relation.target_id:
                 # Standard relation: Link Entity -> Entity
                 target = relation.target_id
-                query = f"""
-                MATCH (a:ContentNode:Entity {{id: $source}})
-                MATCH (b:ContentNode:Entity {{id: $target}})
-                MERGE (a)-[r:{rel_type}]->(b)
-                SET r.truth_value = COALESCE(r.truth_value, 1),
-                    r.epistemic_state = 'asserted',
-                    r.event_id = $event_id,
-                    r.tense = $tense,
-                    r.modality = $modality,
-                    r.is_factive = $is_factive
-                """
-                self.graph.query(
-                    query,
-                    params={
-                        "source": source,
-                        "target": target,
-                        "event_id": obs.event_id,
-                        "tense": relation.tense,
-                        "modality": relation.modality,
-                        "is_factive": relation.is_factive,
-                    },
-                )
+
+                if is_factive:
+                    if rel_type == "IS_A":
+                        # Find or create target Concept
+                        target_res = self.graph.query(
+                            "MATCH (n {id: $id}) RETURN n.name", params={"id": target}
+                        )
+                        target_name = (
+                            target_res.result_set[0][0]
+                            if target_res.result_set
+                            else target
+                        )
+                        concept_name = f"Concept_{target_name.capitalize()}"
+
+                        query = """
+                        MATCH (a {id: $source})
+                        MERGE (c:StructureNote:Concept {name: $concept_name})
+                        MERGE (a)-[r:INSTANCE_OF]->(c)
+                        SET r.event_id = $event_id,
+                            r.tense = $tense,
+                            r.modality = $modality
+                        """
+                        self.graph.query(
+                            query,
+                            params={
+                                "source": source,
+                                "concept_name": concept_name,
+                                "event_id": obs.event_id,
+                                "tense": relation.tense,
+                                "modality": relation.modality,
+                            },
+                        )
+                    else:
+                        query = f"""
+                        MATCH (a:ContentNode:Entity {{id: $source}})
+                        MATCH (b:ContentNode:Entity {{id: $target}})
+                        MERGE (a)-[r:{rel_type}]->(b)
+                        SET r.truth_value = COALESCE(r.truth_value, 1),
+                            r.epistemic_state = 'asserted',
+                            r.event_id = $event_id,
+                            r.tense = $tense,
+                            r.modality = $modality,
+                            r.is_factive = $is_factive
+                        """
+                        self.graph.query(
+                            query,
+                            params={
+                                "source": source,
+                                "target": target,
+                                "event_id": obs.event_id,
+                                "tense": relation.tense,
+                                "modality": relation.modality,
+                                "is_factive": relation.is_factive,
+                            },
+                        )
 
     def query_graph(self, cypher: str, params: dict | None = None) -> list[dict]:
         """
@@ -396,7 +500,7 @@ class WorldModel:
         q = "MATCH (n {id: $id}) RETURN n.name"
         subj_res = self.graph.query(q, params={"id": subject_id})
         obj_res = self.graph.query(q, params={"id": object_id})
-        
+
         subj_name = subj_res.result_set[0][0] if subj_res.result_set else subject_id
         obj_name = obj_res.result_set[0][0] if obj_res.result_set else object_id
 

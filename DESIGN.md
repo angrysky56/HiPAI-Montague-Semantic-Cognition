@@ -10,11 +10,9 @@ This document outlines the v0.5 architecture for the HiPAI-Montague Semantic Cog
 
 ### Pillar 1: Semantic Synthesis (L1 → L2)
 - **Engine**: spaCy (en_core_web_md).
-- **Function**: Replaces legacy regex-based pattern matching with structural dependency parsing.
-- **Invariants**: 
-  - Verbs are lemmatized to their base form.
-  - Plurality and casing are normalized at the NLP layer.
-  - Claims are mapped to OWL individuals and properties.
+- **Function**: Translates natural language into OWL individuals and properties using structural dependency parsing.
+- **Recursive Extraction**: Supports clausal complements (`ccomp`) to extract nested observations for attitude verbs (e.g., "believes", "says").
+- **Entity Resolution**: Implements graph-driven ambiguity resolution using semantic similarity search to link mentions to existing individuals.
 
 ### Pillar 2: Authority via OWL (L2)
 - **Engine**: `owlready2` + HermiT (Java Reasoner).
@@ -33,13 +31,18 @@ This document outlines the v0.5 architecture for the HiPAI-Montague Semantic Cog
   - To identify *why* a block occurred, the engine temporarily destroys the `AllDisjoint` gate axioms and re-syncs.
   - This reveals the full inference graph and identifies multiple simultaneous violations.
 
-### Pillar 4: Neo4j Projection (Read-Model)
-- **Engine**: One-way Downstream Projector.
-- **Function**: Projects successful inferences to Neo4j for high-performance Cypher-based retrieval and embedding search.
+### Pillar 4: Graph Projection (Read-Model)
+- **Engine**: FalkorDB (Neo4j-compatible).
+- **Function**: Projects successful inferences to a vector-capable graph database for high-performance Cypher-based retrieval and semantic search.
 - **Invariants**: 
-  - Sync direction is strictly **OWL → Neo4j**.
+  - Sync direction is strictly **OWL → Graph**.
   - Sync only occurs after a **successful** (consistent) reasoner pass.
-  - **Transitive Projection**: Walking `.ancestors()` ensures the full type hierarchy is queryable in Neo4j.
+  - **Recursive Projection**: Nested observations (attitudes) are projected as linked `EpistemicNode` structures.
+
+### Pillar 5: Recursive Attitudes (Higher-Order Cognition)
+- **Architecture**: Supports n-order beliefs (e.g., "Alice believes that Bob thinks that Charlie is happy").
+- **Graph Mapping**: Attitude relations link `ContentNode:Entity` to `EpistemicNode:Observation` in the graph layer.
+- **Ontology Mapping**: Nested individuals are recursively added to the authoritative OWL ontology.
 
 ---
 
