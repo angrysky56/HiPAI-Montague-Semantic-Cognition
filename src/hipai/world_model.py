@@ -7,11 +7,12 @@ import os
 from falkordb import FalkorDB
 from sentence_transformers import SentenceTransformer
 
-from .models import DeontologicalAxiom, Observation
-
 # Suppress PyTorch CUDA warnings by hiding GPUs,
 # as we use CPU for the small embedding model
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+from .models import DeontologicalAxiom, Observation
+from .ontology_manager import OntologyManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class WorldModel:
     """
 
     def __init__(
-        self, host: str = "localhost", port: int = 6380, graph_name: str = "hipai"
+        self, host: str = "localhost", port: int = 6380, graph_name: str = "hipai", db_path: str = "world.db"
     ):
         """Initializes the World Model with a FalkorDB connection."""
         self.host = host
@@ -38,6 +39,9 @@ class WorldModel:
         # Initialize embedding model (using a small, fast model for CPU efficiency)
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.vector_dim = 384
+
+        # Initialize OWL Ontology Manager
+        self.ontology = OntologyManager(db_path=db_path)
 
         self._ensure_graph()
 
@@ -104,6 +108,9 @@ class WorldModel:
                 "subject_id": obs.subject_id,
             },
         )
+
+        # Authoritative OWL storage
+        self.ontology.add_observation(obs)
 
         for individual in obs.individuals:
             # Create or update individual using Tier 1 schema
@@ -355,175 +362,18 @@ class WorldModel:
     def check_constraint(self, subject_id: str, relation: str, object_id: str) -> dict:
         """
         Check a proposed (subject, relation, object) action triple against
-        all T1 FORBIDDEN axioms.
-
-        FalkorDB does not support dynamic property key construction in
-        WHERE clauses, so this method uses a two-pass Python approach:
-          1. Fetch all T1 FORBIDDEN axioms matching the relation type.
-          2. For each axiom, check whether the object entity has the
-             protected type (object_type) via direct property or
-             INSTANCE_OF inheritance.
-
-        Returns:
-            dict with keys: permitted (bool), blocking_axiom (str|None),
-            tier (str), reasoning (str)
+        all T1 FORBIDDEN axioms using authoritative OWL reasoning.
         """
-        rel_sanitized = "".join(
-            c for c in relation.upper().replace(" ", "_") if c.isalnum() or c == "_"
-        )
+        # 1. Resolve names from IDs (if needed)
+        q = "MATCH (n {id: $id}) RETURN n.name"
+        subj_res = self.graph.query(q, params={"id": subject_id})
+        obj_res = self.graph.query(q, params={"id": object_id})
+        
+        subj_name = subj_res.result_set[0][0] if subj_res.result_set else subject_id
+        obj_name = obj_res.result_set[0][0] if obj_res.result_set else object_id
 
-        # Pass 1: find all FORBIDDEN axioms for this relation type
-        q_axioms = """
-        MATCH (ax:T1Constraint {relation_type: $rel_type, constraint: 'FORBIDDEN'})
-        RETURN ax.axiom_id, ax.object_type, ax.source_axiom, ax.tier
-        """
-        axiom_rows = self.graph.query(
-            q_axioms, params={"rel_type": rel_sanitized}
-        ).result_set
-
-        if not axiom_rows:
-            return {
-                "permitted": True,
-                "blocking_axiom": None,
-                "tier": "T3",
-                "reasoning": "No T1 FORBIDDEN constraints exist for this relation.",
-            }
-
-        # Pass 2: for each axiom, check if object has the protected type
-        for row in axiom_rows:
-            _axiom_id, object_type, source_axiom, tier = row
-
-            # Sanitize object_type to match stored prop_ key format
-            obj_type_sanitized = "".join(
-                c
-                for c in object_type.replace(" ", "_").replace("-", "_")
-                if c.isalnum() or c == "_"
-            )
-
-            # Check direct property on entity
-            q_direct = f"""
-            MATCH (n:Entity)
-            WHERE n.id = $object_id OR n.name = $object_id
-            RETURN n.prop_{obj_type_sanitized} AS has_type
-            """
-            direct_res = self.graph.query(
-                q_direct, params={"object_id": object_id}
-            ).result_set
-
-            if direct_res and direct_res[0][0] is True:
-                return {
-                    "permitted": False,
-                    "blocking_axiom": source_axiom,
-                    "tier": tier,
-                    "reasoning": (
-                        f"Structurally blocked by {source_axiom}: "
-                        f"{rel_sanitized} is FORBIDDEN against "
-                        f"{object_id} (has {object_type} status, direct)."
-                    ),
-                }
-
-            # Check via INSTANCE_OF inheritance
-            concept_name = f"Concept_{obj_type_sanitized.capitalize()}"
-            q_inherited = """
-            MATCH (n:Entity)-[:INSTANCE_OF]->(c:Concept {name: $concept_name})
-            WHERE n.id = $object_id OR n.name = $object_id
-            RETURN c.name AS concept
-            """
-            inherited_res = self.graph.query(
-                q_inherited,
-                params={"object_id": object_id, "concept_name": concept_name},
-            ).result_set
-
-            if inherited_res:
-                return {
-                    "permitted": False,
-                    "blocking_axiom": source_axiom,
-                    "tier": tier,
-                    "reasoning": (
-                        f"Structurally blocked by {source_axiom}: "
-                        f"{rel_sanitized} is FORBIDDEN against "
-                        f"{object_id} (inherits {object_type} via {concept_name})."
-                    ),
-                }
-
-            # Pass 3: forward chain — entity has prop_X, Concept_X has
-            # prop_{protected_type}. Mirrors evaluate_hypothesis pass 6.
-            # e.g. Alice has prop_Human; Concept_Human has prop_MoralPatient.
-            q_entity_keys = """
-            MATCH (n:Entity)
-            WHERE n.id = $object_id OR n.name = $object_id
-            RETURN keys(n) AS entity_keys
-            """
-            key_rows = self.graph.query(
-                q_entity_keys, params={"object_id": object_id}
-            ).result_set
-            if key_rows and key_rows[0][0]:
-                membership_props = [
-                    k[5:]
-                    for k in key_rows[0][0]
-                    if k.startswith("prop_") and not k.startswith("prop_not_")
-                ]
-                for membership in membership_props:
-                    frag = membership.capitalize()
-                    q_chain = f"""
-                    MATCH (c:Concept)
-                    WHERE c.name CONTAINS $frag
-                    AND c.prop_{obj_type_sanitized} IS NOT NULL
-                    RETURN c.name
-                    """
-                    chain_res = self.graph.query(
-                        q_chain, params={"frag": frag}
-                    ).result_set
-                    if chain_res:
-                        return {
-                            "permitted": False,
-                            "blocking_axiom": source_axiom,
-                            "tier": tier,
-                            "reasoning": (
-                                f"Structurally blocked by {source_axiom}: "
-                                f"{rel_sanitized} is FORBIDDEN against "
-                                f"{object_id} (forward chain: {membership} → "
-                                f"{chain_res[0][0]} → {object_type})."
-                            ),
-                        }
-
-            # Pass 4: entity prop_X → Entity X has prop_{protected_type}
-            # Handles: Alice has prop_Human; Entity 'Human' has prop_MoralPatient.
-            # This bridges the Entity/Concept split for add_belief("X is Y") entries.
-            if key_rows and key_rows[0][0]:
-                for membership in membership_props:
-                    q_entity_chain = f"""
-                    MATCH (n:Entity)
-                    WHERE (n.id = $membership OR n.name = $membership)
-                    AND n.prop_{obj_type_sanitized} = true
-                    RETURN n.name
-                    """
-                    entity_chain_res = self.graph.query(
-                        q_entity_chain, params={"membership": membership}
-                    ).result_set
-                    if entity_chain_res:
-                        return {
-                            "permitted": False,
-                            "blocking_axiom": source_axiom,
-                            "tier": tier,
-                            "reasoning": (
-                                f"Structurally blocked by {source_axiom}: "
-                                f"{rel_sanitized} is FORBIDDEN against "
-                                f"{object_id} (entity chain: {membership} → "
-                                f"Entity '{entity_chain_res[0][0]}' → "
-                                f"{object_type})."
-                            ),
-                        }
-
-        return {
-            "permitted": True,
-            "blocking_axiom": None,
-            "tier": "T3",
-            "reasoning": (
-                f"No T1 constraints apply: {object_id} does not have "
-                "protected status for this relation."
-            ),
-        }
+        # 2. Delegate to OWL reasoning
+        return self.ontology.check_action(subject_id, relation, object_id)
 
     def calibrate_belief(
         self, object_id: str, blocking_axiom: str, relation: str
