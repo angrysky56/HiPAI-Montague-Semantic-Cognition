@@ -248,6 +248,7 @@ class HIPAIManager:
 
     def close(self):
         """Closes the underlying world model."""
+        self.world_model.ontology.close()
         self.world_model.close()
 
     def _resolve_ambiguity(self, obs: Observation):

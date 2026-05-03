@@ -22,15 +22,45 @@ class OntologyManager:
     """
 
     def __init__(self, db_path: str = "world.db"):
+        import time
+
         self.db_path = (
             db_path if db_path == ":memory:" else str(Path(db_path).resolve())
         )
-        self.world = World(filename=self.db_path)
+
+        # Retry logic for locked database
+        retries = 5
+        last_err = None
+        while retries > 0:
+            try:
+                self.world = World(filename=self.db_path)
+                # Set a longer busy timeout (5 seconds) for future operations
+                self.world.graph.db.execute("PRAGMA busy_timeout = 5000")
+                break
+            except Exception as e:
+                last_err = e
+                if "locked" in str(e).lower() and retries > 1:
+                    logger.warning("Database %s is locked, retrying...", self.db_path)
+                    time.sleep(1)
+                    retries -= 1
+                else:
+                    raise last_err
+
         self.onto = self.init_world()
 
         # Seed if classes are empty
         if not list(self.onto.classes()):
             self.seed_axioms()
+
+    def close(self):
+        """
+        Closes the SQLite world backend.
+        """
+        if hasattr(self, "world"):
+            try:
+                self.world.close()
+            except Exception as e:
+                logger.warning("Error closing world: %s", e)
 
     def init_world(self, onto_iri: str = "http://hipai.org/ontology"):
         """
