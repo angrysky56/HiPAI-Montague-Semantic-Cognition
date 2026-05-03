@@ -3,9 +3,9 @@
 ## Phase 1: Foundational Substrate
 **Goal:** Establish the spaCy and owlready2 environment and seed the authoritative ontology.
 
-- [ ] PLAN-1: Update dependencies and verify spaCy/en_core_web_md load
-- [ ] PLAN-2: Initialize authoritative world.db (SQLite) and seed T1 axioms
-- [ ] PLAN-3: Implement base OntologyManager for class/property creation
+- [x] PLAN-1: Update dependencies and verify spaCy/en_core_web_md load
+- [x] PLAN-2: Initialize authoritative world.db (SQLite) and seed T1 axioms
+- [x] PLAN-3: Implement base OntologyManager for class/property creation
 
 ## Phase 2: Layer 2 Refactor & API Mirroring
 **Goal:** Transition the semantic engine to the new NLP/OWL pipeline while maintaining MCP compatibility.

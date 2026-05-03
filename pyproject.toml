@@ -13,6 +13,8 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "scikit-learn>=1.8.0",
     "inflect>=7.5.0",
+    "spacy>=3.7.0",
+    "owlready2>=0.46",
 ]
 [project.scripts]
 hipai-mcp = "hipai.mcp_server:main"

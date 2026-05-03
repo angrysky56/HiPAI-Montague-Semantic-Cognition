@@ -77,8 +77,40 @@ def verify_membership(individual_name, class_name):
 - **Shadowing `Thing`**: Do not redefine `class Thing(Thing)` inside functions or local scopes; it causes `UnboundLocalError`.
 - **Direct Class Checks**: Avoid checking `individual.is_a` directly for membership; it only contains direct parents. Use `isinstance(individual, Class)`.
 - **Regex Parsing**: Stop using regex for verb stemming or plural handling. spaCy's `.lemma_` handles this structurally.
+- **Missing Disjointness**: Never omit `AllDisjoint` when creating safety gates. Without explicit disjointness between `RestrictedAction` and `PermittedAction`, the reasoner will simply infer that the action is both, failing to raise the required `OwlReadyInconsistentOntologyError`.
 
-## Constraints
+## Hard Patterns
+- **Mandatory AllDisjoint**: Every T1 restriction must be paired with an `AllDisjoint` declaration.
+
+### Pattern: Mandatory AllDisjoint
+Every T1 restriction must be paired with an `AllDisjoint` declaration.
+  ```python
+  with onto:
+      class RestrictedAction(Action):
+          equivalent_to = [Action & property.some(Range)]
+      AllDisjoint([RestrictedAction, PermittedAction])
+  ```
+
+### Pattern: Relational Typing
+Leverage domain/range restrictions for "free" subject typing (e.g., a subject of `harms` is automatically typed as a `MoralAgent` in the same reasoner pass).
+
+### Pattern: Snapshot Reasoning
+Always perform reasoner passes on a World snapshot/clone (e.g., using a temporary SQLite DB) if an inconsistency block is possible. This prevents "dirtying" the main world model and provides transaction-per-claim semantics.
+
+### Pattern: Relaxed-Sync Diagnostics
+To identify *why* a block occurred:
+1. Catch `OwlReadyInconsistentOntologyError`.
+2. Temporarily `.destroy()` the `AllDisjoint` gate axioms.
+3. Re-run `sync_reasoner()` on the relaxed world.
+4. Inspect the individual's `.is_a` or `isinstance()` to see which `RestrictedAction` classes were inferred.
+
+### Pattern: Transitive Projection (Neo4j Integration)
+When projecting memberships to Neo4j, walk `cls.ancestors()` to ensure the full type hierarchy is queryable via Cypher.
+
+### Pattern: Downstream Invariant
+Projection to Neo4j must only occur after a successful `sync_reasoner()` pass. Neo4j is a read-model for inferred truth; OWL is the source of truth for reasoning.
+
+### Pattern: Execution Metadata
 - **Java Runtime**: HermiT (the default reasoner) requires a JVM.
 - **Model Loading**: spaCy models must be downloaded before use.
 
