@@ -13,3 +13,6 @@ Validate the architectural shift from regex-based NLP and manual property-taggin
 | # | Name | Type | Validates | Verdict | Tags |
 |---|------|------|-----------|---------|------|
 | 001 | spacy-owlready2-integration | standard | Given logical claims in natural language, when parsed by spaCy and reasoned by owlready2, then transitive entails (like "Aristotle is mortal") are correctly inferred. | **VALIDATED ✓** | nlp, reasoning, owl |
+| 002 | paraclete-deontic-restrictions | standard | Given "harms" restrictions, when "Socrates harms Pig", then Socrates is inferred as "MoralAgent". AND when a forbidden action is asserted, then `sync_reasoner()` raises `OwlReadyInconsistentOntologyError`. | **VALIDATED ✓** | nlp, reasoning, paraclete, owl |
+| 003 | consistency-error-semantics | standard | Given inconsistency, verify error semantics (traceback, report, cite) to ensure Layer 5 can consume the signal without crashing. | PENDING | reasoning, errors |
+| 004 | neo4j-owl-sync | integration | [RE-SCOPE PENDING 002] Given OWL ontological state, determine if Neo4j remains necessary or if owlready2's quadstore handles performance and embeddings. | PENDING | integration, neo4j |
