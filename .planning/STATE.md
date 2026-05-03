@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: unknown
-last_updated: "2026-05-01T19:21:53.890Z"
+milestone: v0.5-refactor
+milestone_name: v0.5 Refactor
+status: planning
+last_updated: "2026-05-03T09:09:00Z"
 progress:
-  total_phases: 3
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -15,17 +15,17 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-01)
+See: `DESIGN.md` (v0.5)
 
-**Core value:** Robust, formal semantic parsing and logical reasoning over a dynamic, graph-based world model.
-**Current focus:** Phase 03 — intensional-logic-and-modal-verbs
+**Core value:** Authoritative OWL reasoning with transaction-per-claim semantics and Neo4j read-model projection.
+**Current focus:** Phase 1 — Foundational Substrate
 
 ## Session Context
 
-**Current objective:** Planning Phase 3: Intensional Logic and Modal Verbs.
-**Active phase:** 3
+**Current objective:** Initialize the spaCy/owlready2 foundation.
+**Active phase:** 1
 
 ## Threads
 
-- Completed Phase 2: Logical Form Expansion (Tense & Quantifiers).
-- Now planning Phase 3: Intensional Logic (Attitudes & Modals).
+- Completed Spike Campaign (001-004) - VALIDATED.
+- Now starting Phase 1 of the formal v0.5 refactor.
