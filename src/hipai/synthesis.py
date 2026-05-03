@@ -17,7 +17,7 @@ Synthesizer Module
 import logging
 from typing import Any
 
-from .models import DeontologicalAxiom, Individual, Observation, Relation
+from .models import DeontologicalAxiom, Individual, Observation
 from .parser import ClaimExtractor
 from .world_model import WorldModel
 
@@ -265,26 +265,25 @@ class HIPAIManager:
 
             if results:
                 best = results[0]
-                # Results[0] distance is cosine distance (0.0 means identical)
-                if best["distance"] < 0.5:
-                    # High confidence match, use existing ID
-                    if ind.id != best["id"]:
-                        self.logger.debug(
-                            "Mapping new entity '%s' to existing ID '%s'",
-                            ind.name,
-                            best["id"],
-                        )
+                # Cosine distance: 0.0 is identical, 1.0 is orthogonal
+                # Tightened threshold: 0.2 for identity/near-identity
+                if best["distance"] < 0.2:
                     ind.id = best["id"]
-                elif len(results) > 1:
-                    # Multiple candidates, pick best but note ambiguity
-                    ind.id = best["id"]
-                    obs.confidence *= 0.9  # Penalty for ambiguity
-                    self.logger.info(
-                        "Resolved ambiguous entity '%s' to '%s' (dist: %.2f)",
-                        ind.name,
-                        best["id"],
-                        best["distance"],
-                    )
+                elif best["distance"] < 0.4:
+                    # Moderate confidence match, only if name is similar
+                    # (Simple heuristic: check if name is a substring or vice versa)
+                    if (ind.name.lower() in best["content"].lower()) or (
+                        best["content"].lower() in ind.name.lower()
+                    ):
+                        ind.id = best["id"]
+                        obs.confidence *= 0.9
+                else:
+                    # Too far, treat as new entity
+                    pass
+
+                if len(results) > 1:
+                    # Penalty for multiple candidates
+                    obs.confidence *= 0.9
             id_map[old_id] = ind.id
 
         # Update relation IDs
@@ -302,8 +301,10 @@ class HIPAIManager:
 
     def add_belief(self, text: str, incorporate: bool = True) -> dict[str, Any]:
         """
-        Synthesize a belief from natural language text and add it to the graph if incorporate is True.
-        Delegates parsing to the ClaimExtractor (spaCy-backed) and validates against T1 ontology.
+        Synthesize a belief from natural language text and add it to the
+        graph if incorporate is True.
+        Delegates parsing to the ClaimExtractor (spaCy-backed) and
+        validates against T1 ontology.
         """
         # Clean text
         text = text.strip()
@@ -342,6 +343,7 @@ class HIPAIManager:
 
         # 2. Constraint Check (Paraclete Protocol)
         # We check every relation in the observation against the T1 WorldModel
+
         for rel in obs.relations:
             res = self.world_model.check_constraint(
                 rel.source_id, rel.relation_type, rel.target_id
@@ -350,7 +352,7 @@ class HIPAIManager:
                 self.logger.warning("Constraint Violation: %s", res["reasoning"])
                 return {
                     "status": "error",
-                    "message": f"Deontological violation: {res['reasoning']}",
+                    "message": f"Action blocked: {res['reasoning']}",
                     "blocking_axiom": res["blocking_axiom"],
                 }
 
@@ -376,8 +378,10 @@ class HIPAIManager:
 
             # Get all edges
             res_edges = self.world_model.query_graph(
-                "MATCH (a)-[r]->(b) RETURN COALESCE(properties(a).id, properties(a).name) as source, "
-                "type(r) as type, COALESCE(properties(b).id, properties(b).name) as target"
+                "MATCH (a)-[r]->(b) RETURN "
+                "COALESCE(properties(a).id, properties(a).name) as source, "
+                "type(r) as type, "
+                "COALESCE(properties(b).id, properties(b).name) as target"
             )
             edges = [
                 {"source": r[0], "type": r[1], "target": r[2]}
@@ -389,9 +393,10 @@ class HIPAIManager:
             return {"error": str(e)}
 
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
-        print(f"DEBUG: evaluate_hypothesis called with: {hypothesis}")
+
         # Parse the hypothesis without incorporating it
         parse_res = self.add_belief(hypothesis, incorporate=False)
+
         if parse_res.get("status") != "success" or not parse_res.get("observation"):
             return {
                 "entailment": "Undetermined",
@@ -460,9 +465,9 @@ class HIPAIManager:
             # Direct check for the property
             q = (
                 "MATCH (n:Entity {id: $id}) "
-                f"RETURN n.prop_{prop_sanitized} AS has_pos, n.prop_not_{prop_sanitized} AS has_neg"
+                f"RETURN n.prop_{prop_sanitized} AS has_pos, "
+                f"n.prop_not_{prop_sanitized} AS has_neg"
             )
-            print(f"DEBUG: evaluate_hypothesis checking {subj_id} for {prop_sanitized}")
             res = self.world_model.graph.query(q, params={"id": subj_id})
 
             has_pos = False
@@ -476,7 +481,9 @@ class HIPAIManager:
                     "entailment": (
                         "Entailed" if ptype != "negative_property" else "Contradicted"
                     ),
-                    "evidence": f"Found direct evidence for property {prop} on {subj_id}.",
+                    "evidence": (
+                        f"Found direct evidence for property " f"{prop} on {subj_id}."
+                    ),
                     "logical_form": f"{prop}({subj_id})",
                 }
             elif has_neg:
@@ -484,33 +491,47 @@ class HIPAIManager:
                     "entailment": (
                         "Contradicted" if ptype != "negative_property" else "Entailed"
                     ),
-                    "evidence": f"Found contradictory evidence for property {prop} on {subj_id}.",
+                    "evidence": (
+                        f"Found contradictory evidence for property "
+                        f"{prop} on {subj_id}."
+                    ),
                     "logical_form": f"NOT {prop}({subj_id})",
                 }
 
             # Syllogistic subsumption check
             if ptype == "class_membership":
                 concept = parse.get("concept_name", f"Concept_{prop.capitalize()}")
+
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[:INSTANCE_OF]->(c:Concept) "
-                    "RETURN c.name"
+                    "MATCH (n:Entity {id: $id})-[r:INSTANCE_OF]->(c:Concept) "
+                    "RETURN c.name, r.modality"
                 )
                 res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
                 if res_sub.result_set:
-                    ancestors = [row[0] for row in res_sub.result_set]
-                    if concept in ancestors:
-                        return {
-                            "entailment": "Entailed",
-                            "evidence": f"Subsumption found: {subj_id} is instance of {concept}.",
-                            "logical_form": f"{concept}({subj_id})",
-                        }
+                    for row in res_sub.result_set:
+                        c_name = row[0]
+                        modality = row[1]
+
+                        if c_name == concept:
+                            if modality in ["can", "may", "possible", "might", "could"]:
+                                continue
+                            return {
+                                "entailment": "Entailed",
+                                "evidence": (
+                                    f"Subsumption found: {subj_id} is "
+                                    f"instance of {concept} (modality: {modality})."
+                                ),
+                                "logical_form": f"{concept}({subj_id})",
+                            }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
                     "MATCH (n:Entity {id: $id})-[r:INSTANCE_OF]->(c:Concept) "
-                    f"RETURN c.prop_{prop_sanitized} AS has_pos, c.prop_not_{prop_sanitized} AS has_neg, r.modality AS modality"
+                    f"RETURN c.prop_{prop_sanitized} AS has_pos, "
+                    f"c.prop_not_{prop_sanitized} AS has_neg, "
+                    "r.modality AS modality"
                 )
                 res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
-                print(f"DEBUG: Subsumption results for {subj_id}: {res_sub.result_set}")
+
                 if res_sub.result_set:
                     for row in res_sub.result_set:
                         modality = row[2]
@@ -526,7 +547,11 @@ class HIPAIManager:
                                     if ptype != "negative_property"
                                     else "Contradicted"
                                 ),
-                                "evidence": f"Subsumption found: {subj_id} is instance of concept with property {prop_sanitized} (modality: {modality}).",
+                                "evidence": (
+                                    f"Subsumption found: {subj_id} is "
+                                    f"instance of concept with property "
+                                    f"{prop_sanitized} (modality: {modality})."
+                                ),
                                 "logical_form": f"{prop_sanitized}({subj_id})",
                             }
                         elif row[1] is True:
@@ -541,13 +566,21 @@ class HIPAIManager:
                                     if ptype != "negative_property"
                                     else "Entailed"
                                 ),
-                                "evidence": f"Subsumption found: {subj_id} is instance of concept with negative property {prop_sanitized} (modality: {modality}).",
+                                "evidence": (
+                                    f"Subsumption found: {subj_id} is "
+                                    f"instance of concept with negative "
+                                    f"property {prop_sanitized} "
+                                    f"(modality: {modality})."
+                                ),
                                 "logical_form": f"NOT {prop_sanitized}({subj_id})",
                             }
 
             return {
                 "entailment": "Undetermined",
-                "evidence": f"No direct or subsumptive evidence for property {prop} on {subj_id}.",
+                "evidence": (
+                    f"No direct or subsumptive evidence for property "
+                    f"{prop} on {subj_id}."
+                ),
                 "logical_form": f"? {prop}({subj_id})",
             }
 
@@ -556,7 +589,8 @@ class HIPAIManager:
 
             # Check for exactly this relation
             q = (
-                f"MATCH (a:Entity {{id: $src}})-[r:{rel.relation_type}]->(b:Entity {{id: $tgt}}) "
+                f"MATCH (a:Entity {{id: $src}})-[r:{rel.relation_type}]"
+                f"->(b:Entity {{id: $tgt}}) "
                 "RETURN r.modality, r.truth_value"
             )
             res = self.world_model.graph.query(
@@ -571,30 +605,55 @@ class HIPAIManager:
                     if tv == 0:
                         return {
                             "entailment": "Contradicted",
-                            "evidence": f"Found negative relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
-                            "logical_form": f"NOT {rel.relation_type}({rel.source_id}, {rel.target_id})",
+                            "evidence": (
+                                f"Found negative relation {rel.relation_type} "
+                                f"between {rel.source_id} and {rel.target_id}."
+                            ),
+                            "logical_form": (
+                                f"NOT {rel.relation_type}"
+                                f"({rel.source_id}, {rel.target_id})"
+                            ),
                         }
 
-                    if (
-                        modality in ["can", "may", "possible", "might", "could"]
-                        and rel.modality == "assertive"
-                    ):
+                    if modality in [
+                        "can",
+                        "may",
+                        "possible",
+                        "might",
+                        "could",
+                    ] and rel.modality in [None, "assertive"]:
                         return {
                             "entailment": "Undetermined",
-                            "evidence": f"Found possibility ('{modality}') relation, but hypothesis asserts actuality.",
-                            "logical_form": f"? {rel.relation_type}({rel.source_id}, {rel.target_id})",
+                            "evidence": (
+                                f"Found possibility ('{modality}') relation, "
+                                "but hypothesis asserts actuality."
+                            ),
+                            "logical_form": (
+                                f"? {rel.relation_type}"
+                                f"({rel.source_id}, {rel.target_id})"
+                            ),
                         }
 
                     return {
                         "entailment": "Entailed",
-                        "evidence": f"Found relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
-                        "logical_form": f"{rel.relation_type}({rel.source_id}, {rel.target_id})",
+                        "evidence": (
+                            f"Found relation {rel.relation_type} "
+                            f"between {rel.source_id} and {rel.target_id}."
+                        ),
+                        "logical_form": (
+                            f"{rel.relation_type}" f"({rel.source_id}, {rel.target_id})"
+                        ),
                     }
 
             return {
                 "entailment": "Undetermined",
-                "evidence": f"No evidence for relation {rel.relation_type} between {rel.source_id} and {rel.target_id}.",
-                "logical_form": f"? {rel.relation_type}({rel.source_id}, {rel.target_id})",
+                "evidence": (
+                    f"No evidence for relation {rel.relation_type} "
+                    f"between {rel.source_id} and {rel.target_id}."
+                ),
+                "logical_form": (
+                    f"? {rel.relation_type}" f"({rel.source_id}, {rel.target_id})"
+                ),
             }
 
         return {

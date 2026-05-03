@@ -26,24 +26,37 @@ def test_synthesis(manager):
 
 
 def test_tense_parsing(manager):
+    print(f"DEBUG: test_tense_parsing started with manager type {type(manager)}")
     manager.world_model.clear_graph()
 
     # Test past tense
+    print("DEBUG: Adding Socrates belief")
     manager.add_belief("Socrates was a man")
     # Verify the observation node has tense="past"
-    res = manager.world_model.query_graph("MATCH (o) WHERE o.text_source CONTAINS 'Socrates' RETURN labels(o), o.tense")
-    print(f"DEBUG: Tense parsing result: {res}")
+    q_tense = (
+        "MATCH (o) WHERE o.text_source CONTAINS 'Socrates' "
+        "RETURN labels(o), o.tense"
+    )
+    res = manager.world_model.query_graph(q_tense)
     assert any("past" in str(row) for row in res)
 
     # Test future tense relation
     manager.add_belief("Alice will visit Bob")
     # Verify the edge has tense="future"
-    res_edge = manager.world_model.query_graph("MATCH (a:Entity {id: 'alice'})-[r:VISIT]->(b:Entity {id: 'bob'}) RETURN r.tense")
+    q_visit = (
+        "MATCH (a:Entity {id: 'alice'})-[r:VISIT]->(b:Entity {id: 'bob'}) "
+        "RETURN r.tense"
+    )
+    res_edge = manager.world_model.query_graph(q_visit)
     assert res_edge[0][0] == "future"
 
     # Test present tense (default)
     manager.add_belief("Plato is a philosopher")
-    res_pres = manager.world_model.query_graph("MATCH (o:Observation {text_source: 'Plato is a philosopher'}) RETURN o.tense")
+    q_plato = (
+        "MATCH (o:Observation {text_source: 'Plato is a philosopher'}) "
+        "RETURN o.tense"
+    )
+    res_pres = manager.world_model.query_graph(q_plato)
     assert res_pres[0][0] == "present"
 
     print("[!] Tense parsing test passed!")

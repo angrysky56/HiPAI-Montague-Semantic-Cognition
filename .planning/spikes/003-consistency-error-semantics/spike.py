@@ -1,5 +1,4 @@
 import os
-import sys
 import tempfile
 
 from owlready2 import *

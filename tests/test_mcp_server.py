@@ -58,4 +58,4 @@ async def test_mcp_constraint_violation():
     res = json.loads(res_str)
 
     assert res["status"] == "error"
-    assert "Deontological violation" in res["message"]
+    assert "Action blocked" in res["message"]

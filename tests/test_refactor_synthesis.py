@@ -1,9 +1,5 @@
-import pytest
-import os
-import uuid
-from hipai.synthesis import HIPAIManager
-from hipai.models import Observation, Individual, Relation
 
+import pytest
 
 
 def test_add_belief_basic(manager):
@@ -11,9 +7,9 @@ def test_add_belief_basic(manager):
     res = manager.add_belief("Socrates is a man")
     assert res["status"] == "success"
     obs = res["observation"]
-    assert len(obs.individuals) == 1
+    assert len(obs.individuals) == 2
     assert obs.individuals[0].name == "Socrates"
-    assert "man" in obs.individuals[0].properties
+    assert any(r.relation_type == "IS_A" and r.target_id == "man" for r in obs.relations)
 
 def test_add_belief_action(manager):
     manager.clear_database()
@@ -34,7 +30,8 @@ def test_add_belief_constraint_violation(manager):
     # Agents can harm Patients?
     # Let's check ontology_manager.py seed logic.
     # Agent --harms--> Patient is ALLOWED? 
-    # No, usually harms is a violation if the target is a Patient and the source is NOT authorized?
+    # No, usually harms is a violation if the target is a Patient
+    # and the source is NOT authorized?
     # Actually, our seed says:
     # harms.domain = [Agent]
     # harms.range = [Patient]
@@ -45,7 +42,7 @@ def test_add_belief_constraint_violation(manager):
     res = manager.add_belief("Alice harms Bob")
     # If 'harms' is detected and target is 'Patient', it returns permitted=False.
     assert res["status"] == "error"
-    assert "Deontological violation" in res["message"]
+    assert "Action blocked" in res["message"]
 
 if __name__ == "__main__":
     pytest.main([__file__])

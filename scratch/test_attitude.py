@@ -1,6 +1,4 @@
-import spacy
 
-from hipai.models import Observation
 from hipai.parser import ClaimExtractor
 
 

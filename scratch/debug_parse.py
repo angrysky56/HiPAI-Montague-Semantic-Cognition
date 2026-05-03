@@ -1,4 +1,3 @@
-import os
 
 from hipai.synthesis import HIPAIManager
 

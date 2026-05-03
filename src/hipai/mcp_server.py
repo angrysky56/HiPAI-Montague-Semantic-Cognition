@@ -30,7 +30,7 @@ async def add_belief(text: str) -> str:
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
-        return json.dumps({"status": "error", "message": f"Unexpected error: {str(e)}"})
+        return json.dumps({"status": "error", "message": f"Unexpected error: {e!s}"})
 
 
 @mcp.tool()

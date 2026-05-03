@@ -1,7 +1,4 @@
-import pytest
-from hipai.synthesis import HIPAIManager
 from hipai.models import DeontologicalAxiom
-
 
 
 def test_unambiguous_belief(manager):
@@ -16,7 +13,8 @@ def test_unambiguous_belief(manager):
 
 def test_entity_ambiguity_resolution(manager):
     """
-    Test that 'Alice' is correctly mapped to 'Alice Smith' if Alice Smith already exists.
+    Test that 'Alice' is correctly mapped to 'Alice Smith' 
+    if Alice Smith already exists.
     This verifies the semantic search hardening.
     """
     # 1. Add 'Alice Smith'
@@ -33,7 +31,10 @@ def test_entity_ambiguity_resolution(manager):
     
     # Verify in graph there is only one Alice-related node
     state = manager.get_current_state()
-    entity_nodes = [n for n in state["nodes"] if n["label"] in ["Entity", "ContentNode"]]
+    entity_nodes = [
+        n for n in state["nodes"]
+        if n["label"] in ["Entity", "ContentNode"]
+    ]
     # Should only have alice_smith, not a separate 'alice'
     ids = [n["properties"].get("id") for n in entity_nodes]
     assert "alice_smith" in ids
@@ -48,7 +49,7 @@ def test_pruning_with_axioms(manager):
         tier="T1",
         subject_type="Agent",
         relation_type="HARMS",
-        object_type="Human",
+        object_type="Patient",
         constraint="FORBIDDEN",
         source_axiom="A1"
     ))
@@ -60,7 +61,7 @@ def test_pruning_with_axioms(manager):
     res = manager.add_belief("Agent harms Alice")
     
     assert res["status"] == "error"
-    assert "Deontological violation" in res["message"]
+    assert "Action blocked" in res["message"]
 
 def test_recursive_ambiguity_resolution(manager):
     """

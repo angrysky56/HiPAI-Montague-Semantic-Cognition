@@ -1,4 +1,3 @@
-import sys
 
 from owlready2 import *
 

@@ -46,9 +46,36 @@ class OntologyManager:
         Adds an observation to the OWL model and returns the created instance.
         """
         with self.onto:
-            # 1. Create individuals
+            # 1. Create individuals or class subsumptions
             for individual in obs.individuals:
                 name = individual.id.replace(" ", "_")
+                
+                if individual.quantifier == "all":
+                    # This represents a universal rule: All X are Y
+                    # Find or create class for X
+                    base_cls = None
+                    for c in self.onto.classes():
+                        if c.name.lower() == name.lower() or c.name.lower() == f"concept_{name.lower()}":
+                            base_cls = c
+                            break
+                    if base_cls is None:
+                        base_cls = type(f"Concept_{name.capitalize()}", (self.onto.Entity,), {})
+
+                    if individual.properties:
+                        for prop in individual.properties:
+                            prop_name = prop.replace(" ", "_")
+                            target_cls = None
+                            for c in self.onto.classes():
+                                if c.name.lower() == prop_name.lower() or c.name.lower() == f"concept_{prop_name.lower()}":
+                                    target_cls = c
+                                    break
+                            if target_cls is None:
+                                target_cls = type(f"Concept_{prop_name.capitalize()}", (self.onto.Entity,), {})
+                            
+                            if target_cls not in base_cls.is_a:
+                                base_cls.is_a.append(target_cls)
+                    continue
+
                 onto_ind = self.onto.search_one(iri=f"*{name}")
                 if onto_ind is None:
                     onto_ind = self.onto.Entity(name)
@@ -59,13 +86,13 @@ class OntologyManager:
                         # Case-insensitive lookup
                         cls = None
                         for c in self.onto.classes():
-                            if c.name.lower() == prop_name.lower():
+                            if c.name.lower() == prop_name.lower() or c.name.lower() == f"concept_{prop_name.lower()}":
                                 cls = c
                                 break
 
                         if cls is None:
                             # Create new class if not found
-                            cls = type(f"Concept_{prop_name}", (self.onto.Entity,), {})
+                            cls = type(f"Concept_{prop_name.capitalize()}", (self.onto.Entity,), {})
                         if cls not in onto_ind.is_a:
                             onto_ind.is_a.append(cls)
 
@@ -79,43 +106,43 @@ class OntologyManager:
                     source_ind = self.onto.search_one(
                         iri=f"*{relation.source_id.replace(' ', '_')}"
                     )
-                    target_ind = self.onto.search_one(
-                        iri=f"*{relation.target_id.replace(' ', '_')}"
-                    )
-
-                    if source_ind and target_ind:
-                        rel_name = relation.relation_type.lower()
-
-                        if rel_name == "is_a":
-                            # Handle class membership: source is an instance of target
-                            # Ensure we have a class for the target
-                            target_class = None
-                            target_name = relation.target_id.replace(" ", "_")
+                    rel_name = relation.relation_type.lower()
+                    
+                    if rel_name == "is_a":
+                        # Handle class membership: source is an instance of target class
+                        target_class = None
+                        target_name = relation.target_id.replace(" ", "_")
+                        # Try to find class
+                        target_class = getattr(self.onto, target_name.capitalize(), None)
+                        if not target_class:
                             for c in self.onto.classes():
-                                if c.name.lower() == target_name.lower():
+                                if c.name.lower() == target_name.lower() or c.name.lower() == f"concept_{target_name.lower()}":
                                     target_class = c
                                     break
-                            if target_class is None:
-                                # Create class if not found
-                                target_class = type(
-                                    f"Concept_{target_name}", (self.onto.Entity,), {}
-                                )
+                        if target_class is None:
+                            # Create class if not found
+                            target_class = type(
+                                f"Concept_{target_name.capitalize()}", (self.onto.Entity,), {}
+                            )
+                        
+                        if source_ind and target_class not in source_ind.is_a:
+                            source_ind.is_a.append(target_class)
 
-                            if target_class not in source_ind.is_a:
-                                source_ind.is_a.append(target_class)
-                        else:
+                    else:
+                        target_ind = self.onto.search_one(
+                            iri=f"*{relation.target_id.replace(' ', '_')}"
+                        )
+                        if source_ind and target_ind:
                             # Support both lowercase and CapWords property names
                             rel_prop = getattr(self.onto, rel_name, None)
-
                             if rel_prop is None:
                                 rel_prop = type(
                                     rel_name, (owlready2.ObjectProperty,), {}
                                 )
-
-                            # Use rel_prop.python_name if available, else use rel_prop.name
                             prop_attr = getattr(rel_prop, "python_name", rel_prop.name)
                             if target_ind not in getattr(source_ind, prop_attr):
                                 getattr(source_ind, prop_attr).append(target_ind)
+
 
                         # Link this observation to its components if it's the root fact
                         if main_obs_ind.source is None:
@@ -140,39 +167,94 @@ class OntologyManager:
         return main_obs_ind
 
     def check_action(
-        self, subject_name: str, relation_name: str, object_name: str
+        self,
+        subject_name: str,
+        relation_name: str,
+        object_name: str,
+        constraints: list[dict] | None = None,
     ) -> dict:
         """
         Checks if an action is permitted according to T1 axioms.
-        Currently focused on 'harms' property.
+        Uses Owlready2 to verify if the subject and object match the
+        categories defined in the constraints.
         """
         rel_lower = relation_name.lower()
-
-        # Simple reasoning check:
-        # If the action is 'harms' and subject is Agent and object is Patient,
-        # we check for explicit forbidden rules.
-        # For Phase 2, we implement a basic structural check.
-
         is_forbidden = False
-        reasoning = f"Checking if {subject_name} {rel_lower} {object_name}"
+        blocking_axiom = None
+        reasoning = f"Checking action: {subject_name} {rel_lower} {object_name}"
 
-        if rel_lower in ["harms", "harm"]:
-            # Rule: Agents should not harm Patients
-            # We can check if object is an instance of Patient
-            obj_ind = self.onto.search_one(iri=f"*{object_name.replace(' ', '_')}")
-            if obj_ind and any(
-                isinstance(cls, owlready2.ThingClass)
-                and issubclass(cls, self.onto.Patient)
-                for cls in obj_ind.is_a
-            ):
-                is_forbidden = True
-                reasoning += (
-                    f" | Object {object_name} is a Patient. HARMS is forbidden."
-                )
+        # If no constraints provided, use the hardcoded baseline for backward compatibility
+        # but the goal is to always pass constraints from WorldModel.
+        if not constraints:
+            # Baseline: Agents should not harm Patients
+            if rel_lower in ["harms", "harm"]:
+                obj_ind = self.onto.search_one(iri=f"*{object_name.replace(' ', '_')}")
+                if obj_ind:
+                    # Force a list to avoid iterator issues
+                    classes = list(obj_ind.is_a)
+                    if any(
+                        isinstance(cls, owlready2.ThingClass)
+                        and issubclass(cls, self.onto.Patient)
+                        for cls in classes
+                    ):
+                        is_forbidden = True
+                        blocking_axiom = "T1-HARMS-PROTECTION"
+                        reasoning += (
+                            f" | [Baseline] Object {object_name} is a Patient. "
+                            "HARMS is forbidden."
+                        )
+        else:
+            for ax in constraints:
+                # 1. Match relation type (normalized)
+                ax_rel = ax.get("relation_type", "").lower()
+                if ax_rel != rel_lower and ax_rel != rel_lower + "s":
+                    # Simple heuristic: 'harm' matches 'harms'
+                    if not (
+                        (ax_rel == "harm" and rel_lower == "harms")
+                        or (ax_rel == "harms" and rel_lower == "harm")
+                    ):
+                        continue
+
+                # 2. Check if object matches object_type
+                # We prioritize object_type for T1 protections (Patient-centric)
+                obj_type = ax.get("object_type")
+                if obj_type:
+                    obj_ind = self.onto.search_one(
+                        iri=f"*{object_name.replace(' ', '_')}"
+                    )
+                    # Get the class from the ontology
+                    protected_cls = getattr(self.onto, obj_type, None)
+                    if not protected_cls:
+                        # Try case-insensitive search and also Concept_ prefix
+                        for c in self.onto.classes():
+                            if c.name.lower() == obj_type.lower() or c.name.lower() == f"concept_{obj_type.lower()}":
+                                protected_cls = c
+                                break
+
+                    if obj_ind and protected_cls:
+
+                        # Recursive check for class membership
+                        is_match = isinstance(obj_ind, protected_cls)
+                        if not is_match:
+                            # Owlready2 sometimes needs manual check of ancestors for dynamic classes
+                            for cls in obj_ind.is_a:
+                                if protected_cls == cls or (isinstance(cls, owlready2.ThingClass) and protected_cls in cls.ancestors()):
+                                    is_match = True
+                                    break
+                        
+
+                        if is_match and ax.get("constraint") == "FORBIDDEN":
+                            is_forbidden = True
+                            blocking_axiom = ax.get("source_axiom")
+                            reasoning += (
+                                f" | Violation of {blocking_axiom}: "
+                                f"{object_name} is a {obj_type}."
+                            )
+                            break
 
         return {
             "permitted": not is_forbidden,
-            "blocking_axiom": "T1-HARMS-PROTECTION" if is_forbidden else None,
+            "blocking_axiom": blocking_axiom,
             "tier": "T1",
             "reasoning": reasoning,
         }

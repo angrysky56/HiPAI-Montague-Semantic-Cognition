@@ -1,72 +1,56 @@
-"""
-Linguistic parsing engine for HiPAI-Montague.
-
-Uses spaCy dependency parsing to extract structured claims (Observations)
-from natural language, replacing brittle regex patterns.
-"""
-
-from typing import Optional
-
 import spacy
-
-from .models import Individual, Observation, Relation
-
+from typing import List, Dict, Any, Tuple
+from .models import Individual, Relation, Observation
 
 class ClaimExtractor:
     def __init__(self, model: str = "en_core_web_md"):
-        """
-        Initialize the ClaimExtractor with a spaCy model.
-        """
         try:
             self.nlp = spacy.load(model)
         except OSError:
-            # Fallback or alert if model not found
-            raise ImportError(
-                f"spaCy model {model} not found. Please run 'uv run python -m spacy download {model}'"
-            )
+            import os
+            os.system(f"python -m spacy download {model}")
+            self.nlp = spacy.load(model)
 
-    def extract(self, text: str, max_depth: int = 5) -> Observation:
-        """
-        Extract an Observation from a natural language sentence.
-
-        Args:
-            text: The text to parse.
-            max_depth: Maximum recursion depth for nested observations (default 5).
-        """
+    def extract(self, text: str) -> Observation:
         doc = self.nlp(text)
         observation = Observation(text_source=text)
-
-        # We assume one primary claim per sentence for now
-        # In the future, we can split by sentence or handle multiple ROOTs
-
-        for sent in doc.sents:
-            self._process_sentence(sent, observation, max_depth)
-
+        
+        # 1. Identify Individuals and Basic Properties
+        for token in doc:
+            if token.dep_ in ("nsubj", "nsubjpass"):
+                self._process_subject_cluster(token, observation)
+                
+        # 2. Identify Relations
+        for token in doc:
+            if token.pos_ == "VERB" or (token.pos_ == "AUX" and token.dep_ == "ROOT"):
+                self._process_verb_cluster(token, observation)
+                
         return observation
 
-    def _process_sentence(self, sent, observation: Observation, max_depth: int = 5):
-        """
-        Process a single sentence and update the observation.
-        """
-        try:
-            self._populate_observation(sent.root, observation, max_depth)
-        except Exception as e:
-            import traceback
+    def _process_subject_cluster(self, token, observation: Observation):
+        # Handle quantifiers
+        quantifier = None
+        for child in token.children:
+            if child.dep_ == "det" and child.lemma_.lower() in ("all", "no", "every", "some", "any"):
+                quantifier = child.lemma_.lower()
+            elif child.dep_ == "quantmod" or child.dep_ == "nummod":
+                quantifier = child.text.lower()
 
-            traceback.print_exc()
-            raise e
+        name, id = self._get_full_name_and_id(token)
+        
+        # Check if already exists
+        if not any(ind.id == id for ind in observation.individuals):
+            observation.individuals.append(
+                Individual(name=name, id=id, quantifier=quantifier)
+            )
 
-    def _get_full_name_and_id(self, token):
-        """Extract full name and generated ID for a token including compounds."""
-        # Get all tokens in the subtree that are part of the name
-        name_tokens = [
-            t
-            for t in token.subtree
-            if t.dep_ in ("compound", "flat", "nsubj", "dobj", "obj", "pobj")
-        ]
-        # Ensure we at least include the token itself if it's not in subtree (rare)
-        if token not in name_tokens:
-            name_tokens.append(token)
+    def _get_full_name_and_id(self, token) -> Tuple[str, str]:
+        # Collect compound parts
+        name_tokens = [token]
+        for child in token.children:
+            if child.dep_ == "compound":
+                name_tokens.append(child)
+        
         name_tokens.sort(key=lambda t: t.i)
 
         text_name = " ".join([t.text for t in name_tokens])
@@ -79,74 +63,52 @@ class ClaimExtractor:
 
         return name, id
 
-    def _populate_observation(self, root, observation: Observation, max_depth: int = 5):
-        """
-        Populate an observation from a root token and its subtree.
-        """
-        if max_depth <= 0:
+    def _process_verb_cluster(self, root, observation: Observation):
+        # Find subject
+        subject_id = None
+        quantifier = None
+        for child in root.children:
+            if child.dep_ in ("nsubj", "nsubjpass"):
+                _, subject_id = self._get_full_name_and_id(child)
+                # Check for quantifier on subject
+                for grand in child.children:
+                    if grand.dep_ == "det" and grand.lemma_.lower() in ("all", "no"):
+                        quantifier = grand.lemma_.lower()
+                break
+        
+        if not subject_id:
             return
 
-        # 1. Find Subject
-        # We look for nsubj in the children of the current root
-        subjects = [t for t in root.children if t.dep_ == "nsubj"]
-        if not subjects:
-            return
+        # Tense and Modality
+        tense = "present"
+        modality = None
+        
+        # Simple tense check
+        if root.tag_ in ("VBD", "VBN"):
+            tense = "past"
+        elif any(t.lemma_ == "will" for t in root.children):
+            tense = "future"
+            
+        # Modality check
+        modal_tokens = [t for t in root.children if t.pos_ == "AUX" and t.lemma_ not in ("be", "have", "do", "will")]
+        if modal_tokens:
+            modality = modal_tokens[0].lemma_
 
-        subj_token = subjects[0]
-        subj_name, subject_id = self._get_full_name_and_id(subj_token)
 
-        # Extract Quantifier
-        quantifier = self._extract_quantifier(subj_token)
-
-        # Add subject as individual if not exists
-        if not any(ind.id == subject_id for ind in observation.individuals):
-            observation.individuals.append(
-                Individual(id=subject_id, name=subj_name, quantifier=quantifier)
-            )
-
-        # Extract tense and modality
-        tense = self._detect_tense(root)
-        modality = self._detect_modality(root)
-
-        # 2. Handle Predicate based on ROOT type
-        if root.pos_ == "AUX" or (root.pos_ == "VERB" and root.lemma_ == "be"):
-            self._handle_attribution(
-                root, subject_id, observation, quantifier, tense, modality
-            )
-        elif root.pos_ == "VERB":
-            self._handle_action(
-                root, subject_id, observation, quantifier, max_depth, tense, modality
-            )
-
+        # Set observation-level metadata
         observation.tense = tense
-        observation.modality = modality
+        observation.modality = modality or "assertive"
+        observation.subject_id = subject_id
 
-    def _extract_quantifier(self, subj_token) -> str | None:
-        """
-        Extract quantifier (all, some, no) from the subject's determiner.
-        """
-        for child in subj_token.children:
-            if child.dep_ == "det":
-                text = child.text.lower()
-                if text in ("all", "every", "each"):
-                    return "all"
-                if text in ("some", "a", "an"):
-                    return "some"
-                if text in ("no", "none"):
-                    return "no"
-        return None
+        # 1. Copular (is-a or property)
+        if root.lemma_ == "be":
+            self._handle_copula(root, subject_id, observation, quantifier, tense, modality)
+        else:
+            self._handle_action(root, subject_id, observation, quantifier, tense=tense, modality=modality)
 
-    def _handle_attribution(
-        self,
-        root,
-        subject_id: str,
-        observation: Observation,
-        quantifier: str | None = None,
-        tense: str = "present",
-        modality: str | None = None,
-    ):
+    def _handle_copula(self, root, subject_id: str, observation: Observation, quantifier: str | None = None, tense: str = "present", modality: str | None = None):
         """
-        Handle 'S is A' or 'S is a C' patterns.
+        Handles 'Socrates is a man' or 'Dogs are animals' or 'The apple is red'.
         """
         # Look for attr (noun) or acomp (adj)
         attrs = [t for t in root.children if t.dep_ in ("attr", "acomp")]
@@ -163,24 +125,26 @@ class ClaimExtractor:
 
         if attr_token.pos_ == "NOUN":
             attr_name, attr_id = self._get_full_name_and_id(attr_token)
+            rel_type = "IS_A"
             if is_negated:
-                prop_name = f"not_{attr_name.lower().replace(' ', '_')}"
-                subject.properties.append(prop_name)
-            else:
-                if not any(ind.id == attr_id for ind in observation.individuals):
-                    observation.individuals.append(
-                        Individual(id=attr_id, name=attr_name)
-                    )
-
-                observation.relations.append(
-                    Relation(
-                        source_id=subject_id,
-                        target_id=attr_id,
-                        relation_type="IS_A",
-                        tense=tense,
-                        modality=modality,
-                    )
+                rel_type = "NOT_IS_A"
+            
+            # Ensure the attribute individual is also tracked
+            if not any(ind.id == attr_id for ind in observation.individuals):
+                observation.individuals.append(
+                    Individual(name=attr_name, id=attr_id)
                 )
+            
+            rel = Relation(
+                source_id=subject_id,
+                target_id=attr_id,
+                relation_type=rel_type,
+                tense=tense,
+                modality=modality,
+            )
+            observation.relations.append(rel)
+
+
         elif attr_token.pos_ == "ADJ":
             prop_name = attr_token.lemma_
             if is_negated:
@@ -195,85 +159,77 @@ class ClaimExtractor:
         quantifier: str | None = None,
         max_depth: int = 5,
         tense: str = "present",
-        modality: str | None = None,
+        modality: str | None = None
     ):
         """
-        Handle 'S [verb] O' patterns.
+        Handles 'Socrates drinks hemlock' or 'Dogs chase cats'.
         """
-        objs = [
-            t for t in root.children if t.dep_ in ("dobj", "obj", "npadvmod", "pobj")
-        ]
-        ccomps = [t for t in root.children if t.dep_ == "ccomp"]
-
-        if not objs and not ccomps:
-            return
-
-        subj_ind = next(ind for ind in observation.individuals if ind.id == subject_id)
-
+        # Check for negation
         is_negated = any(t.dep_ == "neg" for t in root.children) or (quantifier == "no")
+        
         rel_type = root.lemma_.upper()
         if is_negated:
             rel_type = f"NOT_{rel_type}"
 
-        # Handle standard objects
-        for obj_token in objs:
-            obj_name, obj_id = self._get_full_name_and_id(obj_token)
-            if not any(ind.id == obj_id for ind in observation.individuals):
-                observation.individuals.append(Individual(id=obj_id, name=obj_name))
+        # Find objects (dobj, prep/pobj, etc.)
+        targets = []
 
+        for child in root.children:
+            if child.dep_ in ("dobj", "obj", "npadvmod"):
+                targets.append(child)
+            elif child.dep_ == "prep":
+                for grand in child.children:
+                    if grand.dep_ == "pobj":
+                        targets.append(grand)
+
+        
+        for target_token in targets:
+            target_name, target_id = self._get_full_name_and_id(target_token)
+            
+            # Ensure target individual exists
+            if not any(ind.id == target_id for ind in observation.individuals):
+                observation.individuals.append(
+                    Individual(name=target_name, id=target_id)
+                )
+            
             observation.relations.append(
                 Relation(
                     source_id=subject_id,
-                    target_id=obj_id,
+                    target_id=target_id,
                     relation_type=rel_type,
                     tense=tense,
-                    modality=modality,
+                    modality=modality
                 )
             )
 
-        # Handle clausal complements (attitudes)
-        for cc_token in ccomps:
-            # Extract nested observation
-            subtree_text = " ".join([t.text for t in cc_token.subtree])
-            inner_obs = Observation(text_source=subtree_text)
-            self._populate_observation(cc_token, inner_obs, max_depth - 1)
-
-            # Determine if the relation is factive based on the verb
-            is_factive = rel_type not in ["BELIEVE", "THINK", "SAY", "CLAIM"]
-
-            relation = Relation(
-                source_id=subject_id,
-                target_observation=inner_obs,
-                relation_type=rel_type,
-                tense=tense,
-                modality=modality,
-                is_factive=is_factive,
-            )
-            observation.relations.append(relation)
-
-        observation.tense = tense
-        observation.modality = modality
-
-    def _detect_tense(self, root) -> str:
-        """Detect tense from the root verb/aux."""
-        print(
-            f"DEBUG: _detect_tense root: text='{root.text}', tag='{root.tag_}', lemma='{root.lemma_}'"
-        )
-        if any(t.text.lower() in ("will", "shall") for t in root.children):
-            return "future"
-        if (
-            root.text.lower() in ("was", "were", "did", "had")
-            or root.tag_ in ("VBD", "VBN")
-            or any(
-                t.text.lower() in ("was", "were", "did", "had") for t in root.children
-            )
-        ):
-            return "past"
-        return "present"
-
-    def _detect_modality(self, root) -> str:
-        """Detect modality (must, can, should) from the root's children."""
-        for t in root.children:
-            if t.dep_ == "aux" and t.text.lower() in ("must", "can", "should", "may"):
-                return t.text.lower()
-        return "assertive"
+        # 3. Clausal Complements (Attitudes)
+        ccomps = [t for t in root.children if t.dep_ == "ccomp"]
+        for ccomp in ccomps:
+            # Get text from subtree
+            ccomp_text = " ".join([t.text for t in ccomp.subtree])
+            # Remove 'that ' if it starts with it
+            if ccomp_text.lower().startswith("that "):
+                ccomp_text = ccomp_text[5:]
+            
+            # Recursively extract
+            sub_obs = self.extract(ccomp_text)
+            if sub_obs:
+                # Merge sub-observation individuals into main observation
+                for sub_ind in sub_obs.individuals:
+                    if not any(ind.id == sub_ind.id for ind in observation.individuals):
+                        observation.individuals.append(sub_ind)
+                
+                # Factivity check
+                factive_verbs = ("know", "realize", "regret", "understand")
+                is_factive_rel = root.lemma_ in factive_verbs
+                
+                observation.relations.append(
+                    Relation(
+                        source_id=subject_id,
+                        target_observation=sub_obs,
+                        relation_type=rel_type,
+                        tense=tense,
+                        modality=modality,
+                        is_factive=is_factive_rel
+                    )
+                )

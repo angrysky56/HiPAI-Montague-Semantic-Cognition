@@ -122,7 +122,6 @@ class WorldModel:
 
         # Authoritative OWL storage
         self.ontology.add_observation(obs)
-
         for individual in obs.individuals:
             # Handle quantifiers: Create Concept node for universals
             if individual.quantifier in ("all", "no"):
@@ -141,6 +140,45 @@ class WorldModel:
                         "id": individual.id,
                     },
                 )
+
+                if individual.quantifier == "all":
+                    # Universal rule: All X are Y
+                    for rel in obs.relations:
+                        if rel.source_id == individual.id and rel.relation_type == "IS_A":
+                            q = """
+                            MATCH (c1:Concept {name: $c1})
+                            MERGE (c2:Concept {name: $c2})
+                            MERGE (c1)-[:SUBCLASS_OF]->(c2)
+                            """
+                            self.graph.query(q, params={"c1": concept_name, "c2": f"Concept_{rel.target_id.capitalize()}"})
+
+                if individual.quantifier == "no":
+                    # Negative universal: No X are Y
+                    props_to_process = []
+                    if isinstance(individual.properties, dict):
+                        props_to_process = [p for p, v in individual.properties.items() if v is True]
+                    elif isinstance(individual.properties, list):
+                        props_to_process = individual.properties
+
+                    for prop in props_to_process:
+                        prop_normalized = prop.replace(" ", "_").replace("-", "_")
+                        prop_sanitized = "".join(c for c in prop_normalized if c.isalnum() or c == "_")
+                        self.graph.query(
+                            f"MATCH (c:Concept {{name: $concept_name}}) SET c.prop_not_{prop_sanitized} = true",
+                            params={"concept_name": concept_name}
+                        )
+                    for rel in obs.relations:
+                        if rel.source_id == individual.id and rel.relation_type in ("NOT_IS_A", "IS_A"):
+                            # Use lemma-based name for property naming
+                            target_ind = next((ind for ind in obs.individuals if ind.id == rel.target_id), None)
+                            target_name = target_ind.name.lower() if target_ind else rel.target_id.lower()
+                            
+
+                            self.graph.query(
+                                "MATCH (c:StructureNote:Concept {name: $concept_name}) "
+                                "SET c.prop_not_" + target_name + " = true",
+                                params={"concept_name": concept_name}
+                            )
                 target_node_label = "Concept"
                 target_id = individual.id
             elif individual.quantifier == "some":
@@ -309,6 +347,7 @@ class WorldModel:
                             r.tense = $tense,
                             r.modality = $modality
                         """
+
                         self.graph.query(
                             query,
                             params={

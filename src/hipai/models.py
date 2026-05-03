@@ -20,7 +20,10 @@ class Individual(BaseModel):
     )
     quantifier: Literal["all", "some", "no"] | None = Field(
         default=None,
-        description="Quantifier associated with this individual (e.g., 'all', 'some', 'no').",
+        description=(
+            "Quantifier associated with this individual "
+            "(e.g., 'all', 'some', 'no')."
+        ),
     )
     properties: list[str] | dict[str, Any] = Field(
         default_factory=list,
@@ -63,7 +66,7 @@ class Relation(BaseModel):
     tense: Literal["past", "present", "future"] = Field(
         default="present", description="The temporal context of the relation."
     )
-    modality: str = Field(default="assertive", description="Modality (e.g. must, can).")
+    modality: str | None = Field(default="assertive", description="Modality (e.g. must, can).")
     is_factive: bool = Field(
         default=True,
         description="Whether the relation is factive (true in the current world).",

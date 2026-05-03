@@ -1,5 +1,6 @@
 from hipai.parser import ClaimExtractor
 
+
 def test_parser():
     extractor = ClaimExtractor()
     

@@ -13,7 +13,8 @@ def test_existential(manager):
     # Test "Some humans are immortal"
     manager.add_belief("Some humans are immortal")
 
-    # Verify an anonymous entity is created that is an INSTANCE_OF Concept_Human with property immortal
+    # Verify an anonymous entity is created that is an INSTANCE_OF
+    # Concept_Human with property immortal
     res = manager.world_model.query_graph(
         "MATCH (e:Entity)-[:INSTANCE_OF]->(c:Concept {name: 'Concept_Human'}) "
         "WHERE e.id STARTS WITH 'anonymous_' "

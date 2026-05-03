@@ -1,4 +1,3 @@
-from hipai.models import Observation
 
 
 def test_deep_recursion(manager):
@@ -12,10 +11,12 @@ def test_deep_recursion(manager):
     # Verify in OWL
     with manager.world_model.ontology.onto:
         print(
-            f"Classes in onto: {[c.name for c in manager.world_model.ontology.onto.classes()]}"
+            f"Classes in onto: "
+            f"{[c.name for c in manager.world_model.ontology.onto.classes()]}"
         )
         print(
-            f"Individuals in onto: {[i.name for i in manager.world_model.ontology.onto.individuals()]}"
+            f"Individuals in onto: "
+            f"{[i.name for i in manager.world_model.ontology.onto.individuals()]}"
         )
 
         # Use more flexible search
@@ -24,7 +25,9 @@ def test_deep_recursion(manager):
         charlie = manager.world_model.ontology.onto.search_one(iri="*charlie*")
 
         print(
-            f"\nFound individuals: Alice={bool(alice)} ({alice.name if alice else 'N/A'}), Bob={bool(bob)}, Charlie={bool(charlie)}"
+            f"\nFound individuals: "
+            f"Alice={bool(alice)} ({alice.name if alice else 'N/A'}), "
+            f"Bob={bool(bob)}, Charlie={bool(charlie)}"
         )
 
         # Check Alice's belief

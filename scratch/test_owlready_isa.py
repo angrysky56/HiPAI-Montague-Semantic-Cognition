@@ -1,4 +1,3 @@
-import owlready2
 from owlready2 import *
 
 # Use in-memory world
@@ -43,9 +42,9 @@ for item in dog.is_a:
         if is_cls:
             print(f"  issubclass(item, Thing): {issubclass(item, Thing)}")
         else:
-            print(f"  Item is NOT a class, skipping issubclass check")
+            print("  Item is NOT a class, skipping issubclass check")
             # This is where we might have the error if we don't check
-            print(f"  Forcing issubclass(item, Thing)...")
+            print("  Forcing issubclass(item, Thing)...")
             issubclass(item, Thing)
     except TypeError as e:
         print(f"  issubclass failed: {e}")

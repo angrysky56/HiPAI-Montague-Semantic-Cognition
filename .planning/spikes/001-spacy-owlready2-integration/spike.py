@@ -1,6 +1,7 @@
+
 import spacy
 from owlready2 import *
-import sys
+
 
 def run_spike():
     print("--- spaCy + owlready2 Spike ---")

@@ -17,8 +17,10 @@ def test_modal_can(manager):
     manager.add_belief("Bob can see Alice.")
 
     # "can" does not entail the fact strictly in traditional logic,
-    # but the task acceptance criteria says "Bob can see Alice results in a Relation with modality='can'."
-    # For evaluate_hypothesis, the prompt didn't say 'can' entails it. Only 'must' and 'know' entail.
+    # but the task acceptance criteria says "Bob can see Alice results in
+    # a Relation with modality='can'."
+    # For evaluate_hypothesis, the prompt didn't say 'can' entails it.
+    # Only 'must' and 'know' entail.
     res = manager.evaluate_hypothesis("Bob sees Alice")
     # "can" is not factive, so it should be Undetermined
     assert res["entailment"] == "Undetermined"
