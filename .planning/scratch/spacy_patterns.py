@@ -9,14 +9,18 @@ test_sentences = [
     "All men are mortal",
     "No man is an island",
     "Social media exploits attention",
-    "Alice believes that Bob is happy"
+    "Alice believes that Bob is happy",
 ]
+
 
 def analyze(text):
     print(f"\nSentence: {text}")
     doc = nlp(text)
     for token in doc:
-        print(f"  {token.text:<12} | {token.pos_:<6} | {token.dep_:<10} | head: {token.head.text}")
+        print(
+            f"  {token.text:<12} | {token.pos_:<6} | {token.dep_:<10} | head: {token.head.text}"
+        )
+
 
 if __name__ == "__main__":
     for sent in test_sentences:

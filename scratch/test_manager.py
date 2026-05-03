@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.append(str(Path("src").resolve()))
 
@@ -15,6 +15,7 @@ def test():
     res = manager.add_belief("Alice is happy")
     print(f"Result: {res['status']}")
     manager.close()
+
 
 if __name__ == "__main__":
     test()

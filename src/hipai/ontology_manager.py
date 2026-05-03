@@ -49,29 +49,41 @@ class OntologyManager:
             # 1. Create individuals or class subsumptions
             for individual in obs.individuals:
                 name = individual.id.replace(" ", "_")
-                
+
                 if individual.quantifier == "all":
                     # This represents a universal rule: All X are Y
                     # Find or create class for X
                     base_cls = None
                     for c in self.onto.classes():
-                        if c.name.lower() == name.lower() or c.name.lower() == f"concept_{name.lower()}":
+                        if (
+                            c.name.lower() == name.lower()
+                            or c.name.lower() == f"concept_{name.lower()}"
+                        ):
                             base_cls = c
                             break
                     if base_cls is None:
-                        base_cls = type(f"Concept_{name.capitalize()}", (self.onto.Entity,), {})
+                        base_cls = type(
+                            f"Concept_{name.capitalize()}", (self.onto.Entity,), {}
+                        )
 
                     if individual.properties:
                         for prop in individual.properties:
                             prop_name = prop.replace(" ", "_")
                             target_cls = None
                             for c in self.onto.classes():
-                                if c.name.lower() == prop_name.lower() or c.name.lower() == f"concept_{prop_name.lower()}":
+                                if (
+                                    c.name.lower() == prop_name.lower()
+                                    or c.name.lower() == f"concept_{prop_name.lower()}"
+                                ):
                                     target_cls = c
                                     break
                             if target_cls is None:
-                                target_cls = type(f"Concept_{prop_name.capitalize()}", (self.onto.Entity,), {})
-                            
+                                target_cls = type(
+                                    f"Concept_{prop_name.capitalize()}",
+                                    (self.onto.Entity,),
+                                    {},
+                                )
+
                             if target_cls not in base_cls.is_a:
                                 base_cls.is_a.append(target_cls)
                     continue
@@ -86,13 +98,20 @@ class OntologyManager:
                         # Case-insensitive lookup
                         cls = None
                         for c in self.onto.classes():
-                            if c.name.lower() == prop_name.lower() or c.name.lower() == f"concept_{prop_name.lower()}":
+                            if (
+                                c.name.lower() == prop_name.lower()
+                                or c.name.lower() == f"concept_{prop_name.lower()}"
+                            ):
                                 cls = c
                                 break
 
                         if cls is None:
                             # Create new class if not found
-                            cls = type(f"Concept_{prop_name.capitalize()}", (self.onto.Entity,), {})
+                            cls = type(
+                                f"Concept_{prop_name.capitalize()}",
+                                (self.onto.Entity,),
+                                {},
+                            )
                         if cls not in onto_ind.is_a:
                             onto_ind.is_a.append(cls)
 
@@ -107,24 +126,32 @@ class OntologyManager:
                         iri=f"*{relation.source_id.replace(' ', '_')}"
                     )
                     rel_name = relation.relation_type.lower()
-                    
+
                     if rel_name == "is_a":
                         # Handle class membership: source is an instance of target class
                         target_class = None
                         target_name = relation.target_id.replace(" ", "_")
                         # Try to find class
-                        target_class = getattr(self.onto, target_name.capitalize(), None)
+                        target_class = getattr(
+                            self.onto, target_name.capitalize(), None
+                        )
                         if not target_class:
                             for c in self.onto.classes():
-                                if c.name.lower() == target_name.lower() or c.name.lower() == f"concept_{target_name.lower()}":
+                                if (
+                                    c.name.lower() == target_name.lower()
+                                    or c.name.lower()
+                                    == f"concept_{target_name.lower()}"
+                                ):
                                     target_class = c
                                     break
                         if target_class is None:
                             # Create class if not found
                             target_class = type(
-                                f"Concept_{target_name.capitalize()}", (self.onto.Entity,), {}
+                                f"Concept_{target_name.capitalize()}",
+                                (self.onto.Entity,),
+                                {},
                             )
-                        
+
                         if source_ind and target_class not in source_ind.is_a:
                             source_ind.is_a.append(target_class)
 
@@ -142,7 +169,6 @@ class OntologyManager:
                             prop_attr = getattr(rel_prop, "python_name", rel_prop.name)
                             if target_ind not in getattr(source_ind, prop_attr):
                                 getattr(source_ind, prop_attr).append(target_ind)
-
 
                         # Link this observation to its components if it's the root fact
                         if main_obs_ind.source is None:
@@ -227,7 +253,10 @@ class OntologyManager:
                     if not protected_cls:
                         # Try case-insensitive search and also Concept_ prefix
                         for c in self.onto.classes():
-                            if c.name.lower() == obj_type.lower() or c.name.lower() == f"concept_{obj_type.lower()}":
+                            if (
+                                c.name.lower() == obj_type.lower()
+                                or c.name.lower() == f"concept_{obj_type.lower()}"
+                            ):
                                 protected_cls = c
                                 break
 
@@ -238,10 +267,12 @@ class OntologyManager:
                         if not is_match:
                             # Owlready2 sometimes needs manual check of ancestors for dynamic classes
                             for cls in obj_ind.is_a:
-                                if protected_cls == cls or (isinstance(cls, owlready2.ThingClass) and protected_cls in cls.ancestors()):
+                                if protected_cls == cls or (
+                                    isinstance(cls, owlready2.ThingClass)
+                                    and protected_cls in cls.ancestors()
+                                ):
                                     is_match = True
                                     break
-                        
 
                         if is_match and ax.get("constraint") == "FORBIDDEN":
                             is_forbidden = True

@@ -1,17 +1,17 @@
-
 import spacy
 from owlready2 import *
 
 
 def run_spike():
     print("--- spaCy + owlready2 Spike ---")
-    
+
     # 1. Load spaCy
     try:
         nlp = spacy.load("en_core_web_sm")
     except OSError:
         print("Downloading spaCy model...")
         from spacy.cli import download
+
         download("en_core_web_sm")
         nlp = spacy.load("en_core_web_sm")
 
@@ -22,19 +22,19 @@ def run_spike():
         "Socrates is a man",
         "All men are mortal",
         "All philosophers are men",
-        "Aristotle is a philosopher"
+        "Aristotle is a philosopher",
     ]
 
     print("\n[1] Parsing sentences with spaCy and building OWL ontology...")
-    
+
     for sent in sentences:
         doc = nlp(sent)
         print(f"  Sentence: '{sent}'")
-        
+
         subject = None
         attribute = None
         is_all = sent.lower().startswith("all")
-        
+
         for token in doc:
             # print(f"    Token: {token.text} | Dep: {token.dep_} | Lemma: {token.lemma_}")
             if token.dep_ in ["nsubj", "nsubjpass"]:
@@ -43,7 +43,9 @@ def run_spike():
                 attribute = token.lemma_.capitalize()
 
         if not subject or not attribute:
-            print(f"    WARNING: Could not extract subject or attribute. Subject={subject}, Attribute={attribute}")
+            print(
+                f"    WARNING: Could not extract subject or attribute. Subject={subject}, Attribute={attribute}"
+            )
             continue
 
         if is_all:
@@ -69,12 +71,12 @@ def run_spike():
         return
 
     print("\n[3] Verification: Is Aristotle mortal?")
-    
+
     # Check Aristotle
     try:
         aristotle = onto.search_one(iri="*Aristotle")
         mortal_class = onto.search_one(iri="*Mortal")
-        
+
         if aristotle and mortal_class:
             # Check if Aristotle is an instance of Mortal (includes inferred)
             is_mortal = isinstance(aristotle, mortal_class)
@@ -84,6 +86,7 @@ def run_spike():
             print("  Error: Aristotle or Mortal class not found in ontology.")
     except Exception as e:
         print(f"  Verification error: {e}")
+
 
 if __name__ == "__main__":
     run_spike()

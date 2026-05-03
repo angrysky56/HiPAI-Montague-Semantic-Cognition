@@ -13,11 +13,11 @@ class HiPAIError(Exception):
 
 class AmbiguityDetectedError(HiPAIError):
     """
-    Raised when a natural language input results in multiple valid 
+    Raised when a natural language input results in multiple valid
     logical interpretations.
 
     Attributes:
-        possible_parses: A list of candidate interpretations (e.g., 
+        possible_parses: A list of candidate interpretations (e.g.,
             Observation objects or dictionaries).
     """
 
