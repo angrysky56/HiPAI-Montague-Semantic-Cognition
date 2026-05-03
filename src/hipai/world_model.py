@@ -180,36 +180,64 @@ class WorldModel:
         for relation in obs.relations:
             # relation: <e, <e, t>>
             source = relation.source_id
-            target = relation.target_id
             rel_type = "".join(
                 c
                 for c in relation.relation_type.upper().replace(" ", "_")
                 if c.isalnum() or c == "_"
             )
 
-            # Track relations and semantic origin
-            query = f"""
-            MATCH (a:ContentNode:Entity {{id: $source}})
-            MATCH (b:ContentNode:Entity {{id: $target}})
-            MERGE (a)-[r:{rel_type}]->(b)
-            SET r.truth_value = COALESCE(r.truth_value, 1),
-                r.epistemic_state = 'asserted',
-                r.event_id = $event_id,
-                r.tense = $tense,
-                r.modality = $modality,
-                r.is_factive = $is_factive
-            """
-            self.graph.query(
-                query,
-                params={
-                    "source": source,
-                    "target": target,
-                    "event_id": obs.event_id,
-                    "tense": relation.tense,
-                    "modality": relation.modality,
-                    "is_factive": relation.is_factive,
-                },
-            )
+            if relation.target_observation:
+                # 1. Incorporate nested observation recursively
+                self.incorporate_observation(relation.target_observation)
+
+                # 2. Link Entity -> Observation (Attitude relation)
+                query = f"""
+                MATCH (a:ContentNode:Entity {{id: $source}})
+                MATCH (o:EpistemicNode:Observation {{event_id: $target_event_id}})
+                MERGE (a)-[r:{rel_type}]->(o)
+                SET r.truth_value = COALESCE(r.truth_value, 1),
+                    r.epistemic_state = 'asserted',
+                    r.event_id = $event_id,
+                    r.tense = $tense,
+                    r.modality = $modality,
+                    r.is_factive = $is_factive
+                """
+                self.graph.query(
+                    query,
+                    params={
+                        "source": source,
+                        "target_event_id": relation.target_observation.event_id,
+                        "event_id": obs.event_id,
+                        "tense": relation.tense,
+                        "modality": relation.modality,
+                        "is_factive": relation.is_factive,
+                    },
+                )
+            elif relation.target_id:
+                # Standard relation: Link Entity -> Entity
+                target = relation.target_id
+                query = f"""
+                MATCH (a:ContentNode:Entity {{id: $source}})
+                MATCH (b:ContentNode:Entity {{id: $target}})
+                MERGE (a)-[r:{rel_type}]->(b)
+                SET r.truth_value = COALESCE(r.truth_value, 1),
+                    r.epistemic_state = 'asserted',
+                    r.event_id = $event_id,
+                    r.tense = $tense,
+                    r.modality = $modality,
+                    r.is_factive = $is_factive
+                """
+                self.graph.query(
+                    query,
+                    params={
+                        "source": source,
+                        "target": target,
+                        "event_id": obs.event_id,
+                        "tense": relation.tense,
+                        "modality": relation.modality,
+                        "is_factive": relation.is_factive,
+                    },
+                )
 
     def query_graph(self, cypher: str, params: dict | None = None) -> list[dict]:
         """

@@ -246,6 +246,38 @@ class HIPAIManager:
         """Standardizer for clearing the model's graph database."""
         self.world_model.clear_database()
 
+    def _resolve_ambiguity(self, obs: Observation):
+        """
+        Hardens the observation by resolving entities against the current World Model.
+        If an entity name is ambiguous, it uses semantic search to find the best match.
+        """
+        for ind in obs.individuals:
+            # Search for existing entities with similar names
+            results = self.world_model.semantic_search(ind.name, top_k=5, threshold=0.4, label="Entity")
+            
+            if results:
+                best = results[0]
+                # Results[0] distance is cosine distance (0.0 means identical)
+                if best["distance"] < 0.2:
+                    # High confidence match, use existing ID
+                    if ind.id != best["id"]:
+                        self.logger.debug("Mapping new entity '%s' to existing ID '%s'", ind.name, best["id"])
+                    ind.id = best["id"]
+                elif len(results) > 1:
+                    # Multiple candidates, pick best but note ambiguity
+                    ind.id = best["id"]
+                    obs.confidence *= 0.9 # Penalty for ambiguity
+                    self.logger.info("Resolved ambiguous entity '%s' to '%s' (dist: %.2f)", 
+                                     ind.name, best["id"], best["distance"])
+
+        # Recursive resolution for attitudes
+        for rel in obs.relations:
+            if rel.target_observation:
+                self._resolve_ambiguity(rel.target_observation)
+                # Propagate lower confidence
+                obs.confidence = min(obs.confidence, rel.target_observation.confidence)
+
+
     def add_belief(self, text: str, incorporate: bool = True) -> dict[str, Any]:
         """
         Synthesize a belief from natural language text and add it to the graph if incorporate is True.
@@ -260,6 +292,9 @@ class HIPAIManager:
         except Exception as e:
             self.logger.error("Parser failed for '%s': %s", text, e)
             return {"status": "error", "message": f"Parsing failed: {e}"}
+
+        # 1.5 Resolve Ambiguity (Context-Aware Entity Linking)
+        self._resolve_ambiguity(obs)
 
         if not obs.individuals and not obs.relations:
             self.logger.warning("No semantic entities extracted from: %s", text)
@@ -346,7 +381,7 @@ class HIPAIManager:
             }
 
         parse = parse_res["parse"]
-        obs = parse["observation"]
+        obs = parse_res["observation"]
         ptype = parse["type"]
 
         # Determine the target entity and property/relation we are checking

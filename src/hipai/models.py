@@ -1,16 +1,7 @@
-"""
-Semantic models for the HiPAI-Montague bridge.
-
-This module defines the Pydantic models used to represent semantic entities,
-properties, relations, and observations as they are mapped from natural
-language to Montague-style formalisms.
-"""
-
+from __future__ import annotations
 import uuid
-from typing import Any, Literal
-
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
-
 
 class Individual(BaseModel):
     """
@@ -52,19 +43,26 @@ class Relation(BaseModel):
     """
 
     source_id: str = Field(..., description="ID of the subject/source individual.")
-    target_id: str = Field(..., description="ID of the object/target individual.")
+    target_id: str | None = Field(default=None, description="ID of the object/target individual.")
+    target_observation: Optional[Observation] = Field(
+        default=None, description="Nested observation for attitude verbs like 'believe'."
+    )
     relation_type: str = Field(
         ..., description="Type of the relation, e.g., 'Loves', 'Kills'."
     )
     tense: Literal["past", "present", "future"] = Field(
         default="present", description="The temporal context of the relation."
     )
-    modality: Literal["must", "can", "may", "should"] | None = Field(
-        default=None, description="Optional modal necessity/possibility."
-    )
+    modality: str = Field(default="assertive", description="Modality (e.g. must, can).")
     is_factive: bool = Field(
-        default=False,
-        description="Whether the relation entails the truth of its complement.",
+        default=True,
+        description="Whether the relation is factive (true in the current world).",
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for this relation.",
     )
 
 
@@ -99,12 +97,15 @@ class Observation(BaseModel):
         default="present",
         description="The temporal context of the overall observation.",
     )
-    modality: Literal["must", "can", "may", "should"] | None = Field(
-        default=None, description="Optional modal necessity/possibility."
-    )
+    modality: str = Field(default="assertive", description="Modality of the observation.")
     subject_id: str | None = Field(
-        default=None,
-        description="The ID of the subject entity holding this attitude (for nested observations).",
+        default=None, description="The primary subject ID of this observation."
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the overall observation.",
     )
 
 
@@ -163,3 +164,5 @@ class DeontologicalAxiom(BaseModel):
             "Provides formal provenance."
         ),
     )
+
+Observation.model_rebuild()

@@ -73,31 +73,30 @@ class OntologyManager:
                             onto_ind.is_a.append(cls)
 
             for relation in obs.relations:
-                # 3. Handle relations
-                # Find source and target
-                # We need a way to map model.Relation.source_id back to name
-                # Since we don't have that easily here, we'll assume 
-                # individuals were added in the same observation.
-                # Actually, models.py:Individual has 'name'.
-                
-                source_ind_model = next((i for i in obs.individuals if i.id == relation.source_id), None)
-                target_ind_model = next((i for i in obs.individuals if i.id == relation.target_id), None)
-                if source_ind_model and target_ind_model:
-                    source_name = source_ind_model.name.replace(" ", "_")
-                    target_name = target_ind_model.name.replace(" ", "_")
-                    
-                    source_onto = self.onto.search_one(iri=f"*{source_name}")
-                    target_onto = self.onto.search_one(iri=f"*{target_name}")
-                    
-                    if source_onto and target_onto:
-                        rel_name = relation.relation_type.lower()
-                        rel_prop = self.onto.search_one(iri=f"*{rel_name}", type=owlready2.ObjectProperty)
-                        if rel_prop is None:
-                            rel_prop = type(rel_name, (owlready2.ObjectProperty,), {})
+                # Handle standard relations
+                if relation.target_id:
+                    source_ind_model = next((i for i in obs.individuals if i.id == relation.source_id), None)
+                    target_ind_model = next((i for i in obs.individuals if i.id == relation.target_id), None)
+                    if source_ind_model and target_ind_model:
+                        source_name = source_ind_model.name.replace(" ", "_")
+                        target_name = target_ind_model.name.replace(" ", "_")
                         
-                        # Add relation
-                        if target_onto not in getattr(source_onto, rel_name):
-                            getattr(source_onto, rel_name).append(target_onto)
+                        source_onto = self.onto.search_one(iri=f"*{source_name}")
+                        target_onto = self.onto.search_one(iri=f"*{target_name}")
+                        
+                        if source_onto and target_onto:
+                            rel_name = relation.relation_type.lower()
+                            rel_prop = self.onto.search_one(iri=f"*{rel_name}", type=owlready2.ObjectProperty)
+                            if rel_prop is None:
+                                rel_prop = type(rel_name, (owlready2.ObjectProperty,), {})
+                            
+                            # Add relation
+                            if target_onto not in getattr(source_onto, rel_name):
+                                getattr(source_onto, rel_name).append(target_onto)
+                
+                # Recursively add nested observations (even if we don't store the attitude relation in OWL yet)
+                if relation.target_observation:
+                    self.add_observation(relation.target_observation)
 
         self.save()
 
