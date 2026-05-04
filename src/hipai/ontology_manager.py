@@ -200,11 +200,18 @@ class OntologyManager:
                                     target_class = c
                                     break
                         if target_class is None:
-                            # Create class if not found — use canonical helper to
-                            # prevent double-prefix and enforce TitleCase
+                            # Create class if not found — use canonical helper
+                            # If the name matches a seeded base class (e.g. Patient),
+                            # inherit from it to maintain baseline protections.
+                            base_parent = getattr(
+                                self.onto, target_name.capitalize(), self.onto.Entity
+                            )
+                            if not isinstance(base_parent, owlready2.ThingClass):
+                                base_parent = self.onto.Entity
+
                             target_class = type(
                                 canonical_concept_name(target_name),
-                                (self.onto.Entity,),
+                                (base_parent,),
                                 {},
                             )
 
@@ -297,11 +304,19 @@ class OntologyManager:
                 if obj_ind:
                     # Force a list to avoid iterator issues
                     classes = list(obj_ind.is_a)
-                    if any(
-                        isinstance(cls, owlready2.ThingClass)
-                        and issubclass(cls, self.onto.Patient)
-                        for cls in classes
-                    ):
+                    is_patient = False
+                    for cls in classes:
+                        if not isinstance(cls, owlready2.ThingClass):
+                            continue
+                        # Match seeded Patient or any class with "Patient" in its name
+                        if (
+                            issubclass(cls, self.onto.Patient)
+                            or "patient" in cls.name.lower()
+                        ):
+                            is_patient = True
+                            break
+
+                    if is_patient:
                         is_forbidden = True
                         blocking_axiom = "T1-HARMS-PROTECTION"
                         reasoning += (
@@ -329,6 +344,12 @@ class OntologyManager:
 
                     # Get the class from the ontology
                     protected_cls = getattr(self.onto, obj_type, None)
+                    if not protected_cls:
+                        # Try canonical name
+                        protected_cls = getattr(
+                            self.onto, canonical_concept_name(obj_type), None
+                        )
+
                     if not protected_cls:
                         # Robust matching: lowercase and strip underscores
                         norm_obj = obj_type.lower().replace("_", "")

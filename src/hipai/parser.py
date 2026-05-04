@@ -57,8 +57,17 @@ class ClaimExtractor:
         text_name = " ".join([t.text for t in name_tokens])
         entity_id = text_name.lower().replace(" ", "_")
 
-        if token.pos_ == "NOUN":
-            name = " ".join([t.lemma_ for t in name_tokens])
+        if token.pos_ in ("NOUN", "PROPN"):
+            lemmas = []
+            for t in name_tokens:
+                lemma = t.lemma_.lower()
+                # spaCy often fails to lemmatize plural proper nouns (e.g. Greeks -> Greeks)
+                # If Number=Plur but lemma still ends in 's', manually singularize.
+                if t.morph.get("Number") == ["Plur"] and lemma.endswith("s"):
+                    # Basic singularization for nationalities/classes
+                    lemma = lemma[:-2] if lemma.endswith("es") else lemma[:-1]
+                lemmas.append(lemma)
+            name = " ".join(lemmas)
         else:
             name = text_name
 
@@ -144,7 +153,7 @@ class ClaimExtractor:
         # Get individual
         subject = next(ind for ind in observation.individuals if ind.id == subject_id)
 
-        if attr_token.pos_ == "NOUN":
+        if attr_token.pos_ in ("NOUN", "PROPN"):
             attr_name, attr_id = self._get_full_name_and_id(attr_token)
             rel_type = "IS_A"
             if is_negated:
