@@ -39,13 +39,16 @@ class OntologyManager:
                 # Set a longer busy timeout (5 seconds) for future operations
                 self.world.graph.db.execute("PRAGMA busy_timeout = 5000")
                 break
-            except (sqlite3.Error, Exception) as e:
+            except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
                 if "locked" in str(e).lower() and retries > 1:
                     logger.warning("Database %s is locked, retrying...", self.db_path)
                     time.sleep(1)
                     retries -= 1
                 else:
-                    raise e from None
+                    raise e
+            except Exception as e:
+                logger.exception("Unexpected error initializing world: %s", e)
+                raise e
 
         self.onto = self.init_world()
 
@@ -60,7 +63,7 @@ class OntologyManager:
         if hasattr(self, "world"):
             try:
                 self.world.close()
-            except Exception as e:
+            except (sqlite3.Error, RuntimeError) as e:
                 logger.error("Error closing world: %s", e, exc_info=True)
 
     def init_world(self, onto_iri: str = "http://hipai.org/ontology"):

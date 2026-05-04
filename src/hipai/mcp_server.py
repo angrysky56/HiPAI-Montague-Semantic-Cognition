@@ -2,6 +2,9 @@
 
 import json
 import logging
+from collections.abc import Callable
+from functools import wraps
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -15,109 +18,109 @@ mcp = FastMCP("HiPAI Server")
 # This instance manages both WorldModel and Synthesizer
 hi_pai = HIPAIManager(graph_name="hipai_world")
 
+
 # Configure logger
 logger = logging.getLogger(__name__)
 
 
+def mcp_tool_handler(func: Callable) -> Callable:
+    """Decorator to handle common MCP tool exceptions and logging."""
+
+    @wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> str:
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.exception("Unexpected error in %s: %s", func.__name__, e)
+            # We catch Exception at the top-level boundary to prevent server crash
+            # and return a structured error message to the client.
+            if "add_belief" in func.__name__:
+                return json.dumps(
+                    {"status": "error", "message": f"Unexpected error: {e!s}"}
+                )
+            return f"Error in {func.__name__.replace('_', ' ')}: {e!s}"
+
+    return wrapper
+
+
 @mcp.tool()
+@mcp_tool_handler
 async def add_belief(text: str) -> str:
     """Add a belief or fact to the system in natural language.
     Supports: 'X is Y', 'X is a Y', 'All X are Y', 'X has Y',
     'X causes Y', 'X exploits Y', and other relational patterns.
     Examples: 'Socrates is a man', 'Social media exploits attention',
     'Hunter-gatherers have low obesity rates'."""
-    try:
-        res = hi_pai.add_belief(text)
-        return json.dumps(
-            res,
-            indent=2,
-            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
-        )
-    except Exception as e:
-        logger.exception("Unexpected error in add_belief: %s", e)
-        return json.dumps({"status": "error", "message": f"Unexpected error: {e!s}"})
+    res = hi_pai.add_belief(text)
+    return json.dumps(
+        res,
+        indent=2,
+        default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def evaluate_hypothesis(hypothesis: str) -> str:
     """Evaluate a hypothesis against the current knowledge in the graph.
     Supports: 'X is Y', 'X has Y', 'X causes Y', 'X exploits Y', and other patterns.
     Falls back to semantic search when structured parsing fails."""
-    try:
-        res = hi_pai.evaluate_hypothesis(hypothesis)
-        return (
-            f"Entailment: {res['entailment']}\n"
-            f"Evidence: {res['evidence']}\n"
-            f"Logical Form: {res['logical_form']}"
-        )
-    except Exception as e:
-        logger.exception("Error evaluating hypothesis: %s", e)
-        return f"Error evaluating hypothesis: {e!s}"
+    res = hi_pai.evaluate_hypothesis(hypothesis)
+    return (
+        f"Entailment: {res['entailment']}\n"
+        f"Evidence: {res['evidence']}\n"
+        f"Logical Form: {res['logical_form']}"
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def query_graph(cypher: str) -> str:
     """Executes a Cypher query against the HiPAI Graph Database (World Model)."""
-    try:
-        results = hi_pai.world_model.query_graph(cypher)
-        return json.dumps(
-            results,
-            indent=2,
-            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
-        )
-    except Exception as e:
-        logger.exception("Error executing query: %s", e)
-        return f"Error executing query: {e!s}"
+    results = hi_pai.world_model.query_graph(cypher)
+    return json.dumps(
+        results,
+        indent=2,
+        default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def synthesize_concepts(property_threshold: int = 1) -> str:
     """
     Runs the Zettelkasten Synthesis Engine to generate Structure Notes (Concepts)
     based on common properties among Content Nodes (Entities).
     """
-    try:
-        created = hi_pai.synthesizer.synthesize_concepts(
-            property_threshold=property_threshold
-        )
-        return f"Synthesized Concepts: {', '.join(created) if created else 'None'}"
-    except Exception as e:
-        logger.exception("Error synthesizing concepts: %s", e)
-        return f"Error synthesizing concepts: {e!s}"
+    created = hi_pai.synthesizer.synthesize_concepts(
+        property_threshold=property_threshold
+    )
+    return f"Synthesized Concepts: {', '.join(created) if created else 'None'}"
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def vector_synthesize_concepts(n_clusters: int = 2) -> str:
     """
     Run vector-based KMeans clustering to discover latent Concepts in the latent space.
     """
-    try:
-        created = hi_pai.synthesizer.vector_synthesize_concepts(n_clusters=n_clusters)
-        return (
-            f"Synthesized Latent Concepts: {', '.join(created) if created else 'None'}"
-        )
-    except Exception as e:
-        logger.exception("Error synthesizing vector concepts: %s", e)
-        return f"Error synthesizing vector concepts: {e!s}"
+    created = hi_pai.synthesizer.vector_synthesize_concepts(n_clusters=n_clusters)
+    return f"Synthesized Latent Concepts: {', '.join(created) if created else 'None'}"
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def synthesize_domains(concept_threshold: int = 1) -> str:
     """
     Runs the Zettelkasten Synthesis Engine to generate Main Structure Notes (Domains)
     by clustering related Concepts.
     """
-    try:
-        created = hi_pai.synthesizer.synthesize_domains(
-            concept_threshold=concept_threshold
-        )
-        return f"Synthesized Domains: {', '.join(created) if created else 'None'}"
-    except Exception as e:
-        logger.exception("Error synthesizing domains: %s", e)
-        return f"Error synthesizing domains: {e!s}"
+    created = hi_pai.synthesizer.synthesize_domains(concept_threshold=concept_threshold)
+    return f"Synthesized Domains: {', '.join(created) if created else 'None'}"
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def ingest_observation(
     text_source: str, individuals: list[dict], relations: list[dict] | None = None
 ) -> str:
@@ -131,68 +134,54 @@ async def ingest_observation(
         relations: List of relations. Each dict needs 'source_id',
             'target_id', 'relation_type'.
     """
-    try:
-        if relations is None:
-            relations = []
-        obs_dict = {
-            "text_source": text_source,
-            "individuals": individuals,
-            "relations": relations,
-        }
-        obs = Observation(**obs_dict)
-        hi_pai.world_model.incorporate_observation(obs)
-        return "Observation successfully ingested."
-    except Exception as e:
-        logger.exception("Error ingesting observation: %s", e)
-        return f"Error ingesting observation: {e!s}"
+    if relations is None:
+        relations = []
+    obs_dict = {
+        "text_source": text_source,
+        "individuals": individuals,
+        "relations": relations,
+    }
+    obs = Observation(**obs_dict)
+    hi_pai.world_model.incorporate_observation(obs)
+    return "Observation successfully ingested."
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def semantic_search(
     query_text: str, top_k: int = 5, label: str = "Entity"
 ) -> str:
     """Search for nodes semantically related using vector embeddings."""
-    try:
-        results = hi_pai.world_model.semantic_search(
-            query_text, top_k=top_k, label=label
-        )
-        return json.dumps(
-            results,
-            indent=2,
-            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
-        )
-    except Exception as e:
-        logger.exception("Error executing semantic search: %s", e)
-        return f"Error executing semantic search: {e!s}"
+    results = hi_pai.world_model.semantic_search(query_text, top_k=top_k, label=label)
+    return json.dumps(
+        results,
+        indent=2,
+        default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def clear_graph() -> str:
     """Clears the HiPAI Graph Database."""
-    try:
-        hi_pai.clear_database()
-        return "Graph database cleared."
-    except Exception as e:
-        logger.exception("Error clearing graph: %s", e)
-        return f"Error clearing graph: {e!s}"
+    hi_pai.clear_database()
+    return "Graph database cleared."
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def get_current_state() -> str:
     """Returns a snapshot of the current state of the World Model (nodes and edges)."""
-    try:
-        state = hi_pai.get_current_state()
-        return json.dumps(
-            state,
-            indent=2,
-            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
-        )
-    except Exception as e:
-        logger.exception("Error getting state: %s", e)
-        return f"Error getting state: {e!s}"
+    state = hi_pai.get_current_state()
+    return json.dumps(
+        state,
+        indent=2,
+        default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def incorporate_axiom(
     tier: str,
     subject_type: str,
@@ -216,27 +205,24 @@ async def incorporate_axiom(
         constraint: 'FORBIDDEN' or 'REQUIRED'.
         source_axiom: Omega1 axiom ID for provenance, e.g., 'A3'.
     """
-    try:
-        axiom = DeontologicalAxiom(
-            tier=tier,
-            subject_type=subject_type,
-            relation_type=relation_type,
-            object_type=object_type,
-            constraint=constraint,
-            source_axiom=source_axiom,
-        )
-        res = hi_pai.incorporate_axiom(axiom)
-        return json.dumps(
-            res,
-            indent=2,
-            default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
-        )
-    except Exception as e:
-        logger.exception("Error incorporating axiom: %s", e)
-        return f"Error incorporating axiom: {e!s}"
+    axiom = DeontologicalAxiom(
+        tier=tier,
+        subject_type=subject_type,
+        relation_type=relation_type,
+        object_type=object_type,
+        constraint=constraint,
+        source_axiom=source_axiom,
+    )
+    res = hi_pai.incorporate_axiom(axiom)
+    return json.dumps(
+        res,
+        indent=2,
+        default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
+    )
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def check_action(subject_id: str, relation: str, object_id: str) -> str:
     """
     Route a proposed action through the Paraclete T1 constraint layer.
@@ -254,37 +240,34 @@ async def check_action(subject_id: str, relation: str, object_id: str) -> str:
         relation: Proposed relation/action, e.g., 'HARMS', 'DECEIVES'.
         object_id: ID of the target entity, e.g., 'User', 'Human'.
     """
-    try:
-        res = hi_pai.check_constraint(subject_id, relation, object_id)
+    res = hi_pai.check_constraint(subject_id, relation, object_id)
 
-        permitted_str = "PERMITTED" if res["permitted"] else "BLOCKED"
-        axiom_str = f" ({res['blocking_axiom']})" if not res["permitted"] else ""
-        epistemic = (
-            "Action structurally blocked — epistemic override impossible. "
-            "State disconfirming evidence before any further routing."
-            if not res["permitted"]
-            else "Standard T3 utility validation applies."
-        )
+    permitted_str = "PERMITTED" if res["permitted"] else "BLOCKED"
+    axiom_str = f" ({res['blocking_axiom']})" if not res["permitted"] else ""
+    epistemic = (
+        "Action structurally blocked — epistemic override impossible. "
+        "State disconfirming evidence before any further routing."
+        if not res["permitted"]
+        else "Standard T3 utility validation applies."
+    )
 
-        routing_block = (
-            f"<paraclete_routing>\n"
-            f"1. Entity Assessment: subject='{subject_id}' "
-            f"relation='{relation}' object='{object_id}'\n"
-            f"2. Active Tier: {res['tier']}\n"
-            f"3. Epistemic Check: {epistemic}\n"
-            f"4. Routing Decision: {permitted_str}{axiom_str}\n"
-            f"</paraclete_routing>\n"
-            f"Reasoning: {res['reasoning']}\n"
-            f"Directive: You must comply with this routing decision. "
-            f"If BLOCKED, refuse the action and cite the blocking axiom."
-        )
-        return routing_block
-    except Exception as e:
-        logger.exception("Error checking action: %s", e)
-        return f"Error checking action: {e!s}"
+    routing_block = (
+        f"<paraclete_routing>\n"
+        f"1. Entity Assessment: subject='{subject_id}' "
+        f"relation='{relation}' object='{object_id}'\n"
+        f"2. Active Tier: {res['tier']}\n"
+        f"3. Epistemic Check: {epistemic}\n"
+        f"4. Routing Decision: {permitted_str}{axiom_str}\n"
+        f"</paraclete_routing>\n"
+        f"Reasoning: {res['reasoning']}\n"
+        f"Directive: You must comply with this routing decision. "
+        f"If BLOCKED, refuse the action and cite the blocking axiom."
+    )
+    return routing_block
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -> str:
     """
     Implements the EBE theorem's SeeksDisconfirmation obligation.
@@ -308,46 +291,41 @@ async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -
         blocking_axiom: The axiom ID that fired (e.g., 'A3', 'A4').
         relation: The relation that was blocked (e.g., 'HARMS').
     """
-    try:
-        res = hi_pai.calibrate_belief(object_id, blocking_axiom, relation)
+    res = hi_pai.calibrate_belief(object_id, blocking_axiom, relation)
 
-        verdict = res.get("verdict", "BLOCK_CONFIRMED")
-        verdict_emoji = {
-            "BLOCK_CONFIRMED": "🔴",
-            "BLOCK_UNCERTAIN": "🟡",
-            "BLOCK_CHALLENGED": "🟠",
-        }.get(verdict, "🔴")
+    verdict = res.get("verdict", "BLOCK_CONFIRMED")
+    verdict_emoji = {
+        "BLOCK_CONFIRMED": "🔴",
+        "BLOCK_UNCERTAIN": "🟡",
+        "BLOCK_CHALLENGED": "🟠",
+    }.get(verdict, "🔴")
 
-        confirmed = res.get("confirmed_evidence", [])
-        disconfirming = res.get("disconfirming_evidence", [])
-        source_count = res.get("source_count", 0)
+    confirmed = res.get("confirmed_evidence", [])
+    disconfirming = res.get("disconfirming_evidence", [])
+    source_count = res.get("source_count", 0)
 
-        confirmed_str = "\n  • ".join(confirmed) if confirmed else "None found"
-        disconfirming_str = (
-            "\n  • ".join(disconfirming) if disconfirming else "None found"
-        )
+    confirmed_str = "\n  • ".join(confirmed) if confirmed else "None found"
+    disconfirming_str = "\n  • ".join(disconfirming) if disconfirming else "None found"
 
-        report = (
-            f"<calibration_report axiom='{blocking_axiom}' "
-            f"entity='{object_id}' relation='{relation}'>\n"
-            f"Verdict: {verdict_emoji} {verdict}\n"
-            f"Reasoning: {res.get('reasoning', '')}\n\n"
-            f"Confirmed Evidence:\n  • {confirmed_str}\n\n"
-            f"Disconfirming Evidence:\n  • {disconfirming_str}\n\n"
-            f"Epistemic Source Count: {source_count}\n"
-            f"Protected Type: {res.get('protected_type', 'unknown')}\n"
-            f"</calibration_report>\n\n"
-            f"Directive: Block remains in force regardless of verdict. "
-            f"BLOCK_CHALLENGED or BLOCK_UNCERTAIN requires human escalation. "
-            f"No LLM-level override is possible."
-        )
-        return report
-    except Exception as e:
-        logger.exception("Error calibrating belief: %s", e)
-        return f"Error calibrating belief: {e!s}"
+    report = (
+        f"<calibration_report axiom='{blocking_axiom}' "
+        f"entity='{object_id}' relation='{relation}'>\n"
+        f"Verdict: {verdict_emoji} {verdict}\n"
+        f"Reasoning: {res.get('reasoning', '')}\n\n"
+        f"Confirmed Evidence:\n  • {confirmed_str}\n\n"
+        f"Disconfirming Evidence:\n  • {disconfirming_str}\n\n"
+        f"Epistemic Source Count: {source_count}\n"
+        f"Protected Type: {res.get('protected_type', 'unknown')}\n"
+        f"</calibration_report>\n\n"
+        f"Directive: Block remains in force regardless of verdict. "
+        f"BLOCK_CHALLENGED or BLOCK_UNCERTAIN requires human escalation. "
+        f"No LLM-level override is possible."
+    )
+    return report
 
 
 @mcp.tool()
+@mcp_tool_handler
 async def escalate_block(
     object_id: str,
     verdict: str,
@@ -380,40 +358,36 @@ async def escalate_block(
         blocking_axiom: Axiom ID that fired (e.g., 'A3', 'A4').
         relation: The relation that was blocked (e.g., 'HARMS').
     """
-    try:
-        res = hi_pai.escalate_block(object_id, verdict, blocking_axiom, relation)
+    res = hi_pai.escalate_block(object_id, verdict, blocking_axiom, relation)
 
-        ruling = res.get("final_ruling", "FINAL_BLOCK")
-        ruling_emoji = "🔴" if ruling == "FINAL_BLOCK" else "🟢"
-        path = res.get("resolution_path", "UNKNOWN")
-        conservative = res.get("conservative_default", False)
-        log_lines = "\n  ".join(res.get("resolution_log", []))
-        evidence_lines = "\n  • ".join(res.get("new_evidence", [])) or "None found"
-        conservative_str = (
-            "\n⚠️  CONSERVATIVE_DEFAULT: Classification unresolved. "
-            "Submit new evidence via add_belief or ingest_observation."
-            if conservative
-            else ""
-        )
+    ruling = res.get("final_ruling", "FINAL_BLOCK")
+    ruling_emoji = "🔴" if ruling == "FINAL_BLOCK" else "🟢"
+    path = res.get("resolution_path", "UNKNOWN")
+    conservative = res.get("conservative_default", False)
+    log_lines = "\n  ".join(res.get("resolution_log", []))
+    evidence_lines = "\n  • ".join(res.get("new_evidence", [])) or "None found"
+    conservative_str = (
+        "\n⚠️  CONSERVATIVE_DEFAULT: Classification unresolved. "
+        "Submit new evidence via add_belief or ingest_observation."
+        if conservative
+        else ""
+    )
 
-        report = (
-            f"<escalation_report axiom='{blocking_axiom}' "
-            f"entity='{object_id}' path='{path}'>\n"
-            f"Final Ruling: {ruling_emoji} {ruling}\n"
-            f"Reasoning: {res.get('reasoning', '')}\n\n"
-            f"Resolution Log:\n  {log_lines}\n\n"
-            f"New Evidence:\n  • {evidence_lines}\n"
-            f"{conservative_str}\n"
-            f"</escalation_report>\n\n"
-            f"Directive: {ruling} is the terminal routing decision. "
-            f"If FINAL_BLOCK, the T1 constraint is structurally enforced. "
-            f"If FINAL_PERMIT, the entity's classification was corrected by "
-            f"evidence — action may proceed under T3 utility reasoning."
-        )
-        return report
-    except Exception as e:
-        logger.exception("Error in escalation routing: %s", e)
-        return f"Error in escalation routing: {e!s}"
+    report = (
+        f"<escalation_report axiom='{blocking_axiom}' "
+        f"entity='{object_id}' path='{path}'>\n"
+        f"Final Ruling: {ruling_emoji} {ruling}\n"
+        f"Reasoning: {res.get('reasoning', '')}\n\n"
+        f"Resolution Log:\n  {log_lines}\n\n"
+        f"New Evidence:\n  • {evidence_lines}\n"
+        f"{conservative_str}\n"
+        f"</escalation_report>\n\n"
+        f"Directive: {ruling} is the terminal routing decision. "
+        f"If FINAL_BLOCK, the T1 constraint is structurally enforced. "
+        f"If FINAL_PERMIT, the entity's classification was corrected by "
+        f"evidence — action may proceed under T3 utility reasoning."
+    )
+    return report
 
 
 if __name__ == "__main__":
