@@ -521,7 +521,8 @@ class HIPAIManager:
                 concept = parse.get("concept_name", f"Concept_{prop.capitalize()}")
 
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
+                    "MATCH (n:Entity {id: $id})"
+                    "-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
                     "WHERE c.name = $concept "
                     "RETURN c.name, 'assertive' AS modality"
                 )
@@ -546,8 +547,10 @@ class HIPAIManager:
                             }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
-                    f"WHERE c.prop_{prop_sanitized} IS NOT NULL OR c.prop_not_{prop_sanitized} IS NOT NULL "
+                    "MATCH (n:Entity {id: $id})"
+                    "-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
+                    f"WHERE c.prop_{prop_sanitized} IS NOT NULL "
+                    f"OR c.prop_not_{prop_sanitized} IS NOT NULL "
                     f"RETURN c.prop_{prop_sanitized} AS has_pos, "
                     f"c.prop_not_{prop_sanitized} AS has_neg, "
                     "'assertive' AS modality"

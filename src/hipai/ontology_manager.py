@@ -33,7 +33,6 @@ class OntologyManager:
 
         # Retry logic for locked database
         retries = 5
-        last_err = None
         while retries > 0:
             try:
                 self.world = World(filename=self.db_path)
@@ -41,7 +40,6 @@ class OntologyManager:
                 self.world.graph.db.execute("PRAGMA busy_timeout = 5000")
                 break
             except (sqlite3.Error, Exception) as e:
-                last_err = e
                 if "locked" in str(e).lower() and retries > 1:
                     logger.warning("Database %s is locked, retrying...", self.db_path)
                     time.sleep(1)
@@ -182,10 +180,13 @@ class OntologyManager:
                         if target_obj:
                             target_name = target_obj.name.replace(" ", "_")
 
-                        # Try to find class
+                        # Try to find class using canonical Concept_ name first
                         target_class = getattr(
-                            self.onto, target_name.capitalize(), None
+                            self.onto, canonical_concept_name(target_name), None
                         )
+                        if not isinstance(target_class, owlready2.ThingClass):
+                            target_class = None
+
                         if not target_class:
                             # Robust matching: lowercase and strip underscores
                             norm_target = target_name.lower().replace("_", "")
@@ -207,7 +208,12 @@ class OntologyManager:
                                 {},
                             )
 
-                        if source_ind and target_class not in source_ind.is_a:
+                        if (
+                            source_ind
+                            and target_class
+                            and isinstance(target_class, owlready2.ThingClass)
+                            and target_class not in source_ind.is_a
+                        ):
                             source_ind.is_a.append(target_class)
 
                     else:
@@ -220,7 +226,12 @@ class OntologyManager:
                             target_name = target_obj.name.replace(" ", "_")
 
                         target_ind = self.onto.search_one(iri=f"*{target_name}")
-                        if source_ind and target_ind:
+                        if (
+                            source_ind
+                            and target_ind
+                            and isinstance(source_ind, owlready2.Thing)
+                            and isinstance(target_ind, owlready2.Thing)
+                        ):
                             # Support both lowercase and CapWords property names
                             rel_prop = getattr(self.onto, rel_name, None)
                             if rel_prop is None:
@@ -403,8 +414,8 @@ class OntologyManager:
                                 except TypeError:
                                     subj_match = False
                             elif subj_cls and subject_name.lower() == subj_type.lower():
-                                # Handle case where individual isn't in OWL yet but name matches
-                                # This is common for "Agent" or seeded concepts.
+                                # Handle case where individual isn't in OWL yet but
+                                # name matches. This is common for "Agent" or seeded.
                                 subj_match = True
 
                             if not subj_match:

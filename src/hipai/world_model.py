@@ -20,6 +20,10 @@ from .ontology_manager import OntologyManager
 logger = logging.getLogger(__name__)
 
 
+# Global cache for the embedding model to avoid redundant loading across instances
+_EMBEDDING_MODEL = None
+
+
 class WorldModel:
     """
     Manages the connection to FalkorDB and maps semantic structures to the graph.
@@ -38,6 +42,7 @@ class WorldModel:
         world_id: str | None = None,
     ):
         """Initializes the World Model with a FalkorDB connection."""
+        global _EMBEDDING_MODEL
         self.host = host
         self.port = port
         self.world_id = world_id
@@ -52,8 +57,22 @@ class WorldModel:
         self.db = FalkorDB(host=self.host, port=self.port)
         self.graph = self.db.select_graph(self.graph_name)
 
-        # Initialize embedding model (using a small, fast model for CPU efficiency)
-        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Initialize or retrieve embedding model
+        if _EMBEDDING_MODEL is None:
+            model_name = "all-MiniLM-L6-v2"
+            try:
+                # Attempt strictly offline load first to avoid network HEAD requests
+                logger.info(f"Attempting offline load for '{model_name}'...")
+                _EMBEDDING_MODEL = SentenceTransformer(
+                    model_name, device="cpu", local_files_only=True
+                )
+            except Exception:
+                # Fallback to online load if not in cache
+                logger.info(
+                    f"Model '{model_name}' not found in cache. Downloading from hub..."
+                )
+                _EMBEDDING_MODEL = SentenceTransformer(model_name, device="cpu")
+        self.embedding_model = _EMBEDDING_MODEL
         self.vector_dim = 384
 
         # Initialize OWL Ontology Manager
@@ -232,7 +251,8 @@ class WorldModel:
                             c for c in prop_normalized if c.isalnum() or c == "_"
                         )
                         self.graph.query(
-                            f"MATCH (c:Concept {{name: $concept_name}}) SET c.prop_not_{prop_sanitized} = true",
+                            "MATCH (c:Concept {name: $concept_name}) "
+                            f"SET c.prop_not_{prop_sanitized} = true",
                             params={"concept_name": concept_name},
                         )
                     for rel in obs.relations:
@@ -260,8 +280,6 @@ class WorldModel:
                                 "SET c.prop_not_" + target_name + " = true",
                                 params={"concept_name": concept_name},
                             )
-                target_node_label = "Concept"
-                target_id = individual.id
             elif individual.quantifier == "some":
                 # Create anonymous entity
                 if not individual.id.startswith("anonymous_"):
@@ -296,8 +314,6 @@ class WorldModel:
                     link_query,
                     params={"concept_name": concept_name, "id": individual.id},
                 )
-                target_node_label = "Entity"
-                target_id = individual.id
             else:
                 # Regular Entity
                 query = """
@@ -315,8 +331,6 @@ class WorldModel:
                     "event_id": obs.event_id,
                 }
                 self.graph.query(query, params=params)
-                target_node_label = "Entity"
-                target_id = individual.id
 
             # Handle property assignments and contradictions
             if individual.properties:
@@ -416,11 +430,7 @@ class WorldModel:
                         # the raw target ID — all routed through the canonical
                         # helper so node names are consistent.
                         target_ind_in_obs = next(
-                            (
-                                ind
-                                for ind in obs.individuals
-                                if ind.id == target
-                            ),
+                            (ind for ind in obs.individuals if ind.id == target),
                             None,
                         )
                         if target_ind_in_obs:
@@ -676,6 +686,11 @@ class WorldModel:
         Disconfirmation targets the entity's status classification, NOT the
         axiom. Axioms are immutable. This method satisfies the epistemic
         obligation and flags uncertainty — it never overrides a T1 block.
+
+        Args:
+            object_id: The target entity from the blocked action.
+            blocking_axiom: The axiom ID that fired.
+            relation: The relation that was blocked.
 
         Returns a structured report with verdict:
           BLOCK_CONFIRMED  — no disconfirming evidence, block stands
@@ -998,7 +1013,8 @@ class WorldModel:
             q_flag = """
             MATCH (n:Entity)
             WHERE n.id = $object_id OR n.name = $object_id
-            SET n.corroboration_needed = true, n.corroboration_requested_at = timestamp()
+            SET n.corroboration_needed = true,
+                n.corroboration_requested_at = timestamp()
             """
             self.graph.query(q_flag, params={"object_id": object_id})
             resolution_log.append(
