@@ -31,24 +31,42 @@ class OntologyManager:
             db_path if db_path == ":memory:" else str(Path(db_path).resolve())
         )
 
+        # Pre-configure WAL mode at the file level BEFORE owlready2 opens the
+        # database. WAL mode is a persistent file-level setting, so setting it
+        # via a separate connection that is immediately closed ensures owlready2
+        # opens in WAL mode (rather than rollback-journal mode, which takes
+        # EXCLUSIVE locks and blocks all other connections).
+        if self.db_path != ":memory:":
+            try:
+                pre_conn = sqlite3.connect(self.db_path, timeout=10.0)
+                mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                pre_conn.execute("PRAGMA busy_timeout = 10000")
+                pre_conn.commit()
+                pre_conn.close()
+                if mode and mode[0] != "wal":
+                    logger.warning(
+                        "WAL mode not activated for %s (current: %s). "
+                        "Another process may hold an exclusive lock.",
+                        self.db_path,
+                        mode[0] if mode else "unknown",
+                    )
+            except sqlite3.Error as e:
+                logger.warning("Pre-WAL setup failed for %s: %s", self.db_path, e)
+
         # Retry logic for locked database
-        retries = 10
+        retries = 5
         attempt = 0
         last_err = None
         while attempt < retries:
             try:
                 self.world = World(filename=self.db_path)
-                # Set a longer busy timeout (10 seconds) for future operations
                 self.world.graph.db.execute("PRAGMA busy_timeout = 10000")
-                # Use WAL mode for better concurrency
-                self.world.graph.db.execute("PRAGMA journal_mode = WAL")
                 break
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
                 last_err = e
                 attempt += 1
                 if "locked" in str(e).lower() and attempt < retries:
-                    # Exponential backoff with a bit of jitter
-                    sleep_time = min(attempt * 0.5, 5)
+                    sleep_time = min(attempt * 0.5, 3)
                     logger.warning(
                         "Database %s is locked (attempt %d/%d), retrying in %.1fs...",
                         self.db_path,
@@ -59,10 +77,11 @@ class OntologyManager:
                     time.sleep(sleep_time)
                 else:
                     logger.error(
-                        "Database %s is locked and failed after %d retries. "
-                        "Check for orphan processes holding the lock.",
+                        "Database %s failed to open after %d retries. "
+                        "Check for orphan processes: lsof %s",
                         self.db_path,
                         attempt,
+                        self.db_path,
                     )
                     raise last_err from e
             except Exception as e:

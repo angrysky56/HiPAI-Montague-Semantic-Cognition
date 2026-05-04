@@ -16,9 +16,8 @@ from sentence_transformers import SentenceTransformer
 # as we use CPU for the small embedding model
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-from . import _utils, models
 from ._utils import canonical_concept_name, lemmatize_verb
-from .models import DeontologicalAxiom, Observation
+from .models import Observation
 from .ontology_manager import OntologyManager
 from .paraclete import ParacleteProtocol
 
@@ -59,7 +58,12 @@ class WorldModel:
             self.graph_name = graph_name
             self.db_path = db_path
 
-        self.db = FalkorDB(host=self.host, port=self.port)
+        self.db = FalkorDB(
+            host=self.host,
+            port=self.port,
+            socket_timeout=30,
+            socket_connect_timeout=10,
+        )
         self.graph = self.db.select_graph(self.graph_name)
 
         # Initialize or retrieve embedding model
@@ -144,6 +148,9 @@ class WorldModel:
             self.graph.delete()
         except redis.exceptions.RedisError as e:
             logger.debug("Graph deletion skipped or failed (might not exist): %s", e)
+        # Re-select graph so the handle points to the freshly-created graph,
+        # not the deleted one.
+        self.graph = self.db.select_graph(self.graph_name)
         self._ensure_graph()
 
     def close(self):

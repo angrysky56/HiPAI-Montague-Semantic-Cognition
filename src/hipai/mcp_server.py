@@ -1,5 +1,6 @@
 """Module for MCP server integration with HiPAI."""
 
+import asyncio
 import atexit
 import json
 import logging
@@ -55,7 +56,7 @@ async def add_belief(text: str) -> str:
     'X causes Y', 'X exploits Y', and other relational patterns.
     Examples: 'Socrates is a man', 'Social media exploits attention',
     'Hunter-gatherers have low obesity rates'."""
-    res = hi_pai.add_belief(text)
+    res = await asyncio.to_thread(hi_pai.add_belief, text)
     return json.dumps(
         res,
         indent=2,
@@ -69,7 +70,7 @@ async def evaluate_hypothesis(hypothesis: str) -> str:
     """Evaluate a hypothesis against the current knowledge in the graph.
     Supports: 'X is Y', 'X has Y', 'X causes Y', 'X exploits Y', and other patterns.
     Falls back to semantic search when structured parsing fails."""
-    res = hi_pai.evaluate_hypothesis(hypothesis)
+    res = await asyncio.to_thread(hi_pai.evaluate_hypothesis, hypothesis)
     return (
         f"Entailment: {res['entailment']}\n"
         f"Evidence: {res['evidence']}\n"
@@ -81,7 +82,7 @@ async def evaluate_hypothesis(hypothesis: str) -> str:
 @mcp_tool_handler
 async def query_graph(cypher: str) -> str:
     """Executes a Cypher query against the HiPAI Graph Database (World Model)."""
-    results = hi_pai.world_model.query_graph(cypher)
+    results = await asyncio.to_thread(hi_pai.world_model.query_graph, cypher)
     return json.dumps(
         results,
         indent=2,
@@ -96,8 +97,8 @@ async def synthesize_concepts(property_threshold: int = 1) -> str:
     Runs the Zettelkasten Synthesis Engine to generate Structure Notes (Concepts)
     based on common properties among Content Nodes (Entities).
     """
-    created = hi_pai.synthesizer.synthesize_concepts(
-        property_threshold=property_threshold
+    created = await asyncio.to_thread(
+        hi_pai.synthesizer.synthesize_concepts, property_threshold
     )
     return f"Synthesized Concepts: {', '.join(created) if created else 'None'}"
 
@@ -108,7 +109,9 @@ async def vector_synthesize_concepts(n_clusters: int = 2) -> str:
     """
     Run vector-based KMeans clustering to discover latent Concepts in the latent space.
     """
-    created = hi_pai.synthesizer.vector_synthesize_concepts(n_clusters=n_clusters)
+    created = await asyncio.to_thread(
+        hi_pai.synthesizer.vector_synthesize_concepts, n_clusters
+    )
     return f"Synthesized Latent Concepts: {', '.join(created) if created else 'None'}"
 
 
@@ -119,7 +122,9 @@ async def synthesize_domains(concept_threshold: int = 1) -> str:
     Runs the Zettelkasten Synthesis Engine to generate Main Structure Notes (Domains)
     by clustering related Concepts.
     """
-    created = hi_pai.synthesizer.synthesize_domains(concept_threshold=concept_threshold)
+    created = await asyncio.to_thread(
+        hi_pai.synthesizer.synthesize_domains, concept_threshold
+    )
     return f"Synthesized Domains: {', '.join(created) if created else 'None'}"
 
 
@@ -146,7 +151,7 @@ async def ingest_observation(
         "relations": relations,
     }
     obs = Observation(**obs_dict)
-    hi_pai.world_model.incorporate_observation(obs)
+    await asyncio.to_thread(hi_pai.world_model.incorporate_observation, obs)
     return "Observation successfully ingested."
 
 
@@ -156,7 +161,9 @@ async def semantic_search(
     query_text: str, top_k: int = 5, label: str = "Entity"
 ) -> str:
     """Search for nodes semantically related using vector embeddings."""
-    results = hi_pai.world_model.semantic_search(query_text, top_k=top_k, label=label)
+    results = await asyncio.to_thread(
+        hi_pai.world_model.semantic_search, query_text, top_k, 2.0, label
+    )
     return json.dumps(
         results,
         indent=2,
@@ -168,7 +175,7 @@ async def semantic_search(
 @mcp_tool_handler
 async def clear_graph() -> str:
     """Clears the HiPAI Graph Database."""
-    hi_pai.clear_database()
+    await asyncio.to_thread(hi_pai.clear_database)
     return "Graph database cleared."
 
 
@@ -176,7 +183,7 @@ async def clear_graph() -> str:
 @mcp_tool_handler
 async def get_current_state() -> str:
     """Returns a snapshot of the current state of the World Model (nodes and edges)."""
-    state = hi_pai.get_current_state()
+    state = await asyncio.to_thread(hi_pai.get_current_state)
     return json.dumps(
         state,
         indent=2,
@@ -217,7 +224,7 @@ async def incorporate_axiom(
         constraint=constraint,
         source_axiom=source_axiom,
     )
-    res = hi_pai.incorporate_axiom(axiom)
+    res = await asyncio.to_thread(hi_pai.incorporate_axiom, axiom)
     return json.dumps(
         res,
         indent=2,
@@ -244,7 +251,9 @@ async def check_action(subject_id: str, relation: str, object_id: str) -> str:
         relation: Proposed relation/action, e.g., 'HARMS', 'DECEIVES'.
         object_id: ID of the target entity, e.g., 'User', 'Human'.
     """
-    res = hi_pai.check_constraint(subject_id, relation, object_id)
+    res = await asyncio.to_thread(
+        hi_pai.check_constraint, subject_id, relation, object_id
+    )
 
     permitted_str = "PERMITTED" if res["permitted"] else "BLOCKED"
     axiom_str = f" ({res['blocking_axiom']})" if not res["permitted"] else ""
@@ -295,7 +304,9 @@ async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -
         blocking_axiom: The axiom ID that fired (e.g., 'A3', 'A4').
         relation: The relation that was blocked (e.g., 'HARMS').
     """
-    res = hi_pai.calibrate_belief(object_id, blocking_axiom, relation)
+    res = await asyncio.to_thread(
+        hi_pai.calibrate_belief, object_id, blocking_axiom, relation
+    )
 
     verdict = res.get("verdict", "BLOCK_CONFIRMED")
     verdict_emoji = {
@@ -362,7 +373,9 @@ async def escalate_block(
         blocking_axiom: Axiom ID that fired (e.g., 'A3', 'A4').
         relation: The relation that was blocked (e.g., 'HARMS').
     """
-    res = hi_pai.escalate_block(object_id, verdict, blocking_axiom, relation)
+    res = await asyncio.to_thread(
+        hi_pai.escalate_block, object_id, verdict, blocking_axiom, relation
+    )
 
     ruling = res.get("final_ruling", "FINAL_BLOCK")
     ruling_emoji = "🔴" if ruling == "FINAL_BLOCK" else "🟢"
@@ -394,8 +407,9 @@ async def escalate_block(
     return report
 
 
+def main():
+    mcp.run()
+
+
 if __name__ == "__main__":
-    try:
-        mcp.run()
-    finally:
-        hi_pai.close()
+    main()
