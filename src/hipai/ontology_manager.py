@@ -37,21 +37,23 @@ class OntologyManager:
         # opens in WAL mode (rather than rollback-journal mode, which takes
         # EXCLUSIVE locks and blocks all other connections).
         if self.db_path != ":memory:":
-            try:
-                pre_conn = sqlite3.connect(self.db_path, timeout=10.0)
-                pre_conn.execute("PRAGMA busy_timeout = 10000")
-                mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
-                pre_conn.commit()
-                pre_conn.close()
-                if mode and mode[0] != "wal":
-                    logger.warning(
-                        "WAL mode not activated for %s (current: %s). "
-                        "Another process may hold an exclusive lock.",
-                        self.db_path,
-                        mode[0] if mode else "unknown",
-                    )
-            except sqlite3.Error as e:
-                logger.warning("Pre-WAL setup failed for %s: %s", self.db_path, e)
+            db_file = Path(self.db_path)
+            if db_file.exists():
+                try:
+                    pre_conn = sqlite3.connect(self.db_path, timeout=10.0)
+                    pre_conn.execute("PRAGMA busy_timeout = 10000")
+                    mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                    pre_conn.commit()
+                    pre_conn.close()
+                    if mode and mode[0] != "wal":
+                        logger.warning(
+                            "WAL mode not activated for %s (current: %s). "
+                            "Another process may hold an exclusive lock.",
+                            self.db_path,
+                            mode[0] if mode else "unknown",
+                        )
+                except sqlite3.Error as e:
+                    logger.warning("Pre-WAL setup failed for %s: %s", self.db_path, e)
 
         # Retry logic for locked database
         retries = 5

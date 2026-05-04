@@ -8,7 +8,7 @@ def test_add_belief_basic(manager):
     assert res["status"] == "success"
     obs = res["observation"]
     assert len(obs.individuals) == 2
-    assert obs.individuals[0].name == "Socrates"
+    assert obs.individuals[0].name == "socrates"
     assert any(r.relation_type == "IS_A" and r.target_id == "man" for r in obs.relations)
 
 def test_add_belief_action(manager):
