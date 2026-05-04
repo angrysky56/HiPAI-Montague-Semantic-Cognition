@@ -236,11 +236,28 @@ class HIPAIManager:
             return v[:-1]  # e.g. "harms" → "harm"
         return v
 
-    def __init__(self, graph_name: str = "hipai_world", db_path: str = "world.db"):
-        self.world_model = WorldModel(graph_name=graph_name, db_path=db_path)
+    def __init__(
+        self,
+        graph_name: str = "hipai_world",
+        db_path: str = "world.db",
+        session_id: str | None = None,
+    ):
+        self.world_model = WorldModel(
+            graph_name=graph_name, db_path=db_path, world_id=session_id
+        )
         self.synthesizer = ZettelkastenSynthesizer(self.world_model)
         self.parser = ClaimExtractor()
         self.logger = logger
+        self.session_id = session_id
+
+    def fork(self, session_id: str) -> "HIPAIManager":
+        """Creates an isolated clone of the manager."""
+        new_wm = self.world_model.fork(session_id)
+        new_mgr = HIPAIManager()
+        new_mgr.world_model = new_wm
+        new_mgr.synthesizer = ZettelkastenSynthesizer(new_wm)
+        new_mgr.session_id = session_id
+        return new_mgr
 
     def clear_database(self):
         """Standardizer for clearing the model's graph database."""
@@ -504,10 +521,13 @@ class HIPAIManager:
                 concept = parse.get("concept_name", f"Concept_{prop.capitalize()}")
 
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[r:INSTANCE_OF]->(c:Concept) "
-                    "RETURN c.name, r.modality"
+                    "MATCH (n:Entity {id: $id})-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
+                    "WHERE c.name = $concept "
+                    "RETURN c.name, 'assertive' AS modality"
                 )
-                res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
+                res_sub = self.world_model.graph.query(
+                    q_sub, params={"id": subj_id, "concept": concept}
+                )
                 if res_sub.result_set:
                     for row in res_sub.result_set:
                         c_name = row[0]
@@ -526,10 +546,11 @@ class HIPAIManager:
                             }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
-                    "MATCH (n:Entity {id: $id})-[r:INSTANCE_OF]->(c:Concept) "
+                    "MATCH (n:Entity {id: $id})-[:IS_A|INSTANCE_OF|SUBCLASS_OF|REPRESENTS*0..]->(c:Concept) "
+                    f"WHERE c.prop_{prop_sanitized} IS NOT NULL OR c.prop_not_{prop_sanitized} IS NOT NULL "
                     f"RETURN c.prop_{prop_sanitized} AS has_pos, "
                     f"c.prop_not_{prop_sanitized} AS has_neg, "
-                    "r.modality AS modality"
+                    "'assertive' AS modality"
                 )
                 res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
 

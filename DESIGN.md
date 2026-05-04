@@ -19,6 +19,8 @@ This document outlines the v0.5 architecture for the HiPAI-Montague Semantic Cog
 - **Function**: Acts as the authoritative world model for reasoning, consistency checking, and safety.
 - **Safety Gates (Paraclete)**: 
   - T1 axioms are expressed as OWL `equivalent_to` restrictions.
+  - **Dynamic Axiom Injection**: Supports loading custom T1 axioms from the graph read-model into the OWL world for runtime constraint updates.
+  - **Recursive Inheritance**: Safety gates traverse the class hierarchy properly using authoritative OWL reasoning.
   - **Mandatory Disjointness**: Every restricted class must be explicitly `DisjointWith(PermittedAction)`.
   - **Relational Typing**: Uses domain/range restrictions to automatically infer types (e.g., `Socrates harms X` -> `Socrates: MoralAgent`).
 
@@ -33,6 +35,7 @@ This document outlines the v0.5 architecture for the HiPAI-Montague Semantic Cog
 
 ### Pillar 4: Graph Projection (Read-Model)
 - **Engine**: FalkorDB (Neo4j-compatible).
+- **Namespace Bridge**: Implements the `REPRESENTS` bridge between `Concept` nodes (universals) and `Entity` nodes (individuals) to enable transitive reasoning across both namespaces.
 - **Function**: Projects successful inferences to a vector-capable graph database for high-performance Cypher-based retrieval and semantic search.
 - **Invariants**: 
   - Sync direction is strictly **OWL → Graph**.
@@ -62,9 +65,10 @@ This document outlines the v0.5 architecture for the HiPAI-Montague Semantic Cog
 
 ### Snapshot Reasoning
 ```python
-# Create Isolation for the Transaction
-scratch_world = World(filename=temp_db_snapshot)
-sync_reasoner(scratch_world) # Rollback is implicitly scratch_world.close()
+# Create Isolation for the Transaction via HIPAIManager fork
+isolated_mgr = main_mgr.fork(session_id="exploration_42")
+isolated_mgr.add_belief("Exploratory claim...") 
+# Rollback is implicit: isolated_mgr.clear_database() or simply not merging
 ```
 
 ### Relaxed-Sync Diagnostics

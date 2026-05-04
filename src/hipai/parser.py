@@ -1,3 +1,5 @@
+import os
+
 import spacy
 
 from .models import Individual, Observation, Relation
@@ -8,8 +10,8 @@ class ClaimExtractor:
         try:
             self.nlp = spacy.load(model)
         except OSError:
-            import os
 
+            # trunk-ignore(bandit/B605)
             os.system(f"python -m spacy download {model}")
             self.nlp = spacy.load(model)
 
@@ -44,32 +46,32 @@ class ClaimExtractor:
             elif child.dep_ == "quantmod" or child.dep_ == "nummod":
                 quantifier = child.text.lower()
 
-        name, id = self._get_full_name_and_id(token)
+        name, entity_id = self._get_full_name_and_id(token)
 
         # Check if already exists
-        if not any(ind.id == id for ind in observation.individuals):
+        if not any(ind.id == entity_id for ind in observation.individuals):
             observation.individuals.append(
-                Individual(name=name, id=id, quantifier=quantifier)
+                Individual(name=name, id=entity_id, quantifier=quantifier)
             )
 
     def _get_full_name_and_id(self, token) -> tuple[str, str]:
         # Collect compound parts
         name_tokens = [token]
         for child in token.children:
-            if child.dep_ == "compound":
+            if child.dep_ in ("compound", "amod"):
                 name_tokens.append(child)
 
         name_tokens.sort(key=lambda t: t.i)
 
         text_name = " ".join([t.text for t in name_tokens])
-        id = text_name.lower().replace(" ", "_")
+        entity_id = text_name.lower().replace(" ", "_")
 
         if token.pos_ == "NOUN":
             name = " ".join([t.lemma_ for t in name_tokens])
         else:
             name = text_name
 
-        return name, id
+        return name, entity_id
 
     def _process_verb_cluster(self, root, observation: Observation):
         # Find subject

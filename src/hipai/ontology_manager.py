@@ -3,6 +3,8 @@ Ontology management for HiPAI using owlready2.
 """
 
 import logging
+import sqlite3
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +24,6 @@ class OntologyManager:
     """
 
     def __init__(self, db_path: str = "world.db"):
-        import time
 
         self.db_path = (
             db_path if db_path == ":memory:" else str(Path(db_path).resolve())
@@ -37,14 +38,14 @@ class OntologyManager:
                 # Set a longer busy timeout (5 seconds) for future operations
                 self.world.graph.db.execute("PRAGMA busy_timeout = 5000")
                 break
-            except Exception as e:
+            except (sqlite3.Error, Exception) as e:
                 last_err = e
                 if "locked" in str(e).lower() and retries > 1:
                     logger.warning("Database %s is locked, retrying...", self.db_path)
                     time.sleep(1)
                     retries -= 1
                 else:
-                    raise last_err
+                    raise e from None
 
         self.onto = self.init_world()
 
@@ -59,7 +60,7 @@ class OntologyManager:
         if hasattr(self, "world"):
             try:
                 self.world.close()
-            except Exception as e:
+            except (sqlite3.Error, Exception) as e:
                 logger.warning("Error closing world: %s", e)
 
     def init_world(self, onto_iri: str = "http://hipai.org/ontology"):
@@ -166,12 +167,15 @@ class OntologyManager:
                             self.onto, target_name.capitalize(), None
                         )
                         if not target_class:
+                            # Robust matching: lowercase and strip underscores
+                            norm_target = target_name.lower().replace("_", "")
                             for c in self.onto.classes():
-                                if (
-                                    c.name.lower() == target_name.lower()
-                                    or c.name.lower()
-                                    == f"concept_{target_name.lower()}"
-                                ):
+                                norm_c = (
+                                    c.name.lower()
+                                    .replace("_", "")
+                                    .replace("concept", "")
+                                )
+                                if norm_c == norm_target:
                                     target_class = c
                                     break
                         if target_class is None:
@@ -239,8 +243,8 @@ class OntologyManager:
         blocking_axiom = None
         reasoning = f"Checking action: {subject_name} {rel_lower} {object_name}"
 
-        # If no constraints provided, use the hardcoded baseline for backward compatibility
-        # but the goal is to always pass constraints from WorldModel.
+        # If no constraints provided, use the hardcoded baseline for backward
+        # compatibility but the goal is to always pass constraints from WorldModel.
         if not constraints:
             # Baseline: Agents should not harm Patients
             if rel_lower in ["harms", "harm"]:
@@ -263,30 +267,38 @@ class OntologyManager:
             for ax in constraints:
                 # 1. Match relation type (normalized)
                 ax_rel = ax.get("relation_type", "").lower()
-                if ax_rel != rel_lower and ax_rel != rel_lower + "s":
-                    # Simple heuristic: 'harm' matches 'harms'
-                    if not (
+                if (
+                    ax_rel != rel_lower
+                    and ax_rel != rel_lower + "s"
+                    and not (
                         (ax_rel == "harm" and rel_lower == "harms")
                         or (ax_rel == "harms" and rel_lower == "harm")
-                    ):
-                        continue
+                    )
+                ):
+                    continue
 
                 # 2. Check if object matches object_type
                 # We prioritize object_type for T1 protections (Patient-centric)
                 obj_type = ax.get("object_type")
                 if obj_type:
-                    obj_ind = self.onto.search_one(
-                        iri=f"*{object_name.replace(' ', '_')}"
-                    )
+                    obj_ind = self.onto.search_one(iri=f"*{object_name}")
+                    if not obj_ind:
+                        # Try case-insensitive
+                        for ind in self.onto.individuals():
+                            if ind.name.lower() == object_name.lower():
+                                obj_ind = ind
+                                break
+
                     # Get the class from the ontology
                     protected_cls = getattr(self.onto, obj_type, None)
                     if not protected_cls:
-                        # Try case-insensitive search and also Concept_ prefix
+                        # Robust matching: lowercase and strip underscores
+                        norm_obj = obj_type.lower().replace("_", "")
                         for c in self.onto.classes():
-                            if (
-                                c.name.lower() == obj_type.lower()
-                                or c.name.lower() == f"concept_{obj_type.lower()}"
-                            ):
+                            norm_c = (
+                                c.name.lower().replace("_", "").replace("concept", "")
+                            )
+                            if norm_c == norm_obj:
                                 protected_cls = c
                                 break
 
@@ -295,7 +307,8 @@ class OntologyManager:
                         # Recursive check for class membership
                         is_match = isinstance(obj_ind, protected_cls)
                         if not is_match:
-                            # Owlready2 sometimes needs manual check of ancestors for dynamic classes
+                            # Owlready2 sometimes needs manual check of ancestors
+                            # for dynamic classes
                             for cls in obj_ind.is_a:
                                 if protected_cls == cls or (
                                     isinstance(cls, owlready2.ThingClass)
@@ -304,11 +317,53 @@ class OntologyManager:
                                     is_match = True
                                     break
 
+                        # 3. Check if subject matches subject_type
+                        subj_type = ax.get("subject_type")
+                        if is_match and subj_type and subj_type != "Any":
+                            subj_ind = self.onto.search_one(iri=f"*{subject_name}")
+                            if not subj_ind:
+                                # Try case-insensitive
+                                for ind in self.onto.individuals():
+                                    if ind.name.lower() == subject_name.lower():
+                                        subj_ind = ind
+                                        break
+
+                            # Find the subject class
+                            subj_cls = getattr(self.onto, subj_type, None)
+                            if not subj_cls:
+                                norm_subj = subj_type.lower().replace("_", "")
+                                for c in self.onto.classes():
+                                    norm_c = (
+                                        c.name.lower()
+                                        .replace("_", "")
+                                        .replace("concept", "")
+                                    )
+                                    if norm_c == norm_subj:
+                                        subj_cls = c
+                                        break
+
+                            if (
+                                subj_ind
+                                and subj_cls
+                                and not isinstance(subj_ind, subj_cls)
+                            ):
+                                subj_match = False
+                                for cls in subj_ind.is_a:
+                                    if subj_cls == cls or (
+                                        isinstance(cls, owlready2.ThingClass)
+                                        and subj_cls in cls.ancestors()
+                                    ):
+                                        subj_match = True
+                                        break
+                                if not subj_match:
+                                    is_match = False
+
                         if is_match and ax.get("constraint") == "FORBIDDEN":
                             is_forbidden = True
                             blocking_axiom = ax.get("source_axiom")
                             reasoning += (
                                 f" | Violation of {blocking_axiom}: "
+                                f"{subject_name} is a {subj_type} and "
                                 f"{object_name} is a {obj_type}."
                             )
                             break
@@ -387,15 +442,26 @@ class OntologyManager:
             owlready2.AllDisjoint([Action, Agent, Patient])
 
         logger.info("Axioms seeded successfully.")
+        # Ensure classes are referenced to satisfy linters
+        _ = [
+            Entity,
+            Action,
+            Agent,
+            Patient,
+            Observation,
+            Harm,
+            Deceive,
+            ViolateAgency,
+            Source,
+            Target,
+            NestedObservation,
+            RelationType,
+        ]
         self.save()
 
     def save(self):
         """Saves the current world state to the SQLite DB."""
         self.world.save()
-
-    def close(self):
-        """Closes the world connection."""
-        self.world.close()
 
 
 if __name__ == "__main__":

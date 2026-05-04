@@ -4,6 +4,7 @@ import contextlib
 import logging
 import os
 import uuid
+from pathlib import Path
 
 from falkordb import FalkorDB
 from sentence_transformers import SentenceTransformer
@@ -33,11 +34,20 @@ class WorldModel:
         port: int = 6380,
         graph_name: str = "hipai",
         db_path: str = "world.db",
+        world_id: str | None = None,
     ):
         """Initializes the World Model with a FalkorDB connection."""
         self.host = host
         self.port = port
-        self.graph_name = graph_name
+        self.world_id = world_id
+
+        if world_id:
+            self.graph_name = f"{graph_name}_{world_id}"
+            self.db_path = f"{db_path.replace('.db', '')}_{world_id}.db"
+        else:
+            self.graph_name = graph_name
+            self.db_path = db_path
+
         self.db = FalkorDB(host=self.host, port=self.port)
         self.graph = self.db.select_graph(self.graph_name)
 
@@ -46,9 +56,33 @@ class WorldModel:
         self.vector_dim = 384
 
         # Initialize OWL Ontology Manager
-        self.ontology = OntologyManager(db_path=db_path)
+        self.ontology = OntologyManager(db_path=self.db_path)
 
         self._ensure_graph()
+
+    def fork(self, world_id: str) -> "WorldModel":
+        """
+        Creates an isolated clone of the current World Model.
+        Clones the SQLite ontology and provides a separate graph namespace.
+        """
+        import shutil
+
+        new_db_path = f"{self.db_path.replace('.db', '')}_{world_id}.db"
+        if not Path(new_db_path).exists():
+            shutil.copy2(self.db_path, new_db_path)
+
+        # Create new world model in isolated namespace
+        new_wm = WorldModel(
+            host=self.host,
+            port=self.port,
+            graph_name=self.graph_name,
+            db_path=self.db_path,
+            world_id=world_id,
+        )
+
+        # Note: Graph content is NOT automatically copied here to keep it fast.
+        # Use sync_from() if a full clone is needed.
+        return new_wm
 
     def _ensure_graph(self):
         """Ensure we are connected to the right graph and indices are set up."""
@@ -129,8 +163,10 @@ class WorldModel:
                 concept_query = """
                 MATCH (o:EpistemicNode:Observation {event_id: $event_id})
                 MERGE (c:StructureNote:Concept {name: $concept_name})
+                MERGE (e:ContentNode:Entity {id: $id})
+                MERGE (c)-[:REPRESENTS]->(e)
                 MERGE (o)-[:OBSERVED]->(c)
-                SET c.id = $id
+                SET c.id = $id, e.name = $name
                 """
                 self.graph.query(
                     concept_query,
@@ -138,6 +174,7 @@ class WorldModel:
                         "event_id": obs.event_id,
                         "concept_name": concept_name,
                         "id": individual.id,
+                        "name": individual.name,
                     },
                 )
 
@@ -368,10 +405,13 @@ class WorldModel:
                         query = """
                         MATCH (a {id: $source})
                         MERGE (c:StructureNote:Concept {name: $concept_name})
+                        MERGE (e:ContentNode:Entity {id: $target})
+                        MERGE (c)-[:REPRESENTS]->(e)
                         MERGE (a)-[r:INSTANCE_OF]->(c)
                         SET r.event_id = $event_id,
                             r.tense = $tense,
-                            r.modality = $modality
+                            r.modality = $modality,
+                            e.name = $target_name
                         """
 
                         self.graph.query(
@@ -379,6 +419,8 @@ class WorldModel:
                             params={
                                 "source": source,
                                 "concept_name": concept_name,
+                                "target": target,
+                                "target_name": target_name,
                                 "event_id": obs.event_id,
                                 "tense": relation.tense,
                                 "modality": relation.modality,
@@ -569,8 +611,22 @@ class WorldModel:
         subj_name = subj_res.result_set[0][0] if subj_res.result_set else subject_id
         obj_name = obj_res.result_set[0][0] if obj_res.result_set else object_id
 
+        # 1.5 Retrieve custom axioms from FalkorDB
+        q_axioms = "MATCH (a:T1Constraint) RETURN a"
+        res_axioms = self.graph.query(q_axioms)
+        constraints = []
+        if res_axioms.result_set:
+            for row in res_axioms.result_set:
+                node = row[0]
+                if hasattr(node, "properties"):
+                    constraints.append(node.properties)
+                elif isinstance(node, dict):
+                    constraints.append(node)
+
         # 2. Delegate to OWL reasoning
-        return self.ontology.check_action(subject_id, relation, object_id)
+        return self.ontology.check_action(
+            subj_name, relation, obj_name, constraints=constraints
+        )
 
     def calibrate_belief(
         self, object_id: str, blocking_axiom: str, relation: str
