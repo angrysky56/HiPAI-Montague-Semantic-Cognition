@@ -298,157 +298,129 @@ class OntologyManager:
         blocking_axiom = None
         reasoning = f"Checking action: {subject_name} {rel_lemma} {object_name}"
 
-        # If no constraints provided, use the hardcoded baseline for backward
-        # compatibility but the goal is to always pass constraints from WorldModel.
         if not constraints:
-            # Baseline protections: HARM is always forbidden if object is a Patient
-            if rel_lemma == "harm":
-                obj_ind = self.onto.search_one(iri=f"*{object_name.replace(' ', '_')}")
-                if obj_ind:
-                    # Force a list to avoid iterator issues
-                    classes = list(obj_ind.is_a)
-                    is_patient = False
-                    for cls in classes:
-                        if not isinstance(cls, owlready2.ThingClass):
-                            continue
-                        # Match seeded Patient or any class with "Patient" in its name
-                        if (
-                            issubclass(cls, self.onto.Patient)
-                            or "patient" in cls.name.lower()
-                        ):
-                            is_patient = True
+            return {"permitted": True, "reasoning": "No constraints to check."}
+
+        for ax in constraints:
+            # 1. Match relation type (lemmatised)
+            ax_rel = lemmatize_verb(ax.get("relation_type", ""))
+            if ax_rel != rel_lemma:
+                continue
+
+            # 2. Check if object matches object_type
+            # We prioritize object_type for T1 protections (Patient-centric)
+            obj_type_raw = ax.get("object_type")
+            if obj_type_raw:
+                # Lookup with both raw and canonical names
+                protected_cls = getattr(self.onto, obj_type_raw, None)
+                if not protected_cls:
+                    protected_cls = getattr(
+                        self.onto, canonical_concept_name(obj_type_raw), None
+                    )
+
+                if not protected_cls:
+                    # Robust matching: lowercase and strip underscores
+                    norm_obj = (
+                        obj_type_raw.lower().replace("_", "").replace("concept", "")
+                    )
+                    for c in self.onto.classes():
+                        norm_c = c.name.lower().replace("_", "").replace("concept", "")
+                        if norm_c == norm_obj:
+                            protected_cls = c
                             break
 
-                    if is_patient:
-                        is_forbidden = True
-                        blocking_axiom = "T1-HARMS-PROTECTION"
-                        reasoning += (
-                            f" | [Baseline] Object {object_name} is a Patient. "
-                            "HARMS is forbidden."
-                        )
-        else:
-            for ax in constraints:
-                # 1. Match relation type (lemmatised)
-                ax_rel = lemmatize_verb(ax.get("relation_type", ""))
-                if ax_rel != rel_lemma:
-                    continue
+                obj_ind = self.onto.search_one(iri=f"*{object_name}")
+                if not obj_ind:
+                    # Try case-insensitive
+                    for ind in self.onto.individuals():
+                        if ind.name.lower() == object_name.lower():
+                            obj_ind = ind
+                            break
 
-                # 2. Check if object matches object_type
-                # We prioritize object_type for T1 protections (Patient-centric)
-                obj_type_raw = ax.get("object_type")
-                if obj_type_raw:
-                    # Lookup with both raw and canonical names
-                    protected_cls = getattr(self.onto, obj_type_raw, None)
-                    if not protected_cls:
-                        protected_cls = getattr(
-                            self.onto, canonical_concept_name(obj_type_raw), None
-                        )
+                if obj_ind and protected_cls:
+                    # Recursive check for class membership
+                    try:
+                        is_match = isinstance(obj_ind, protected_cls)
+                    except TypeError:
+                        is_match = False
 
-                    if not protected_cls:
-                        # Robust matching: lowercase and strip underscores
-                        norm_obj = (
-                            obj_type_raw.lower().replace("_", "").replace("concept", "")
-                        )
-                        for c in self.onto.classes():
-                            norm_c = (
-                                c.name.lower().replace("_", "").replace("concept", "")
+                    if not is_match:
+                        for cls in obj_ind.is_a:
+                            if protected_cls == cls or (
+                                isinstance(cls, owlready2.ThingClass)
+                                and protected_cls in cls.ancestors()
+                            ):
+                                is_match = True
+                                break
+
+                    # 3. Check if subject matches subject_type
+                    subj_type_raw = ax.get("subject_type")
+                    if is_match and subj_type_raw and subj_type_raw != "Any":
+                        subj_cls = getattr(self.onto, subj_type_raw, None)
+                        if not subj_cls:
+                            subj_cls = getattr(
+                                self.onto,
+                                canonical_concept_name(subj_type_raw),
+                                None,
                             )
-                            if norm_c == norm_obj:
-                                protected_cls = c
-                                break
 
-                    obj_ind = self.onto.search_one(iri=f"*{object_name}")
-                    if not obj_ind:
-                        # Try case-insensitive
-                        for ind in self.onto.individuals():
-                            if ind.name.lower() == object_name.lower():
-                                obj_ind = ind
-                                break
-
-                    if obj_ind and protected_cls:
-                        # Recursive check for class membership
-                        try:
-                            is_match = isinstance(obj_ind, protected_cls)
-                        except TypeError:
-                            is_match = False
-
-                        if not is_match:
-                            for cls in obj_ind.is_a:
-                                if protected_cls == cls or (
-                                    isinstance(cls, owlready2.ThingClass)
-                                    and protected_cls in cls.ancestors()
-                                ):
-                                    is_match = True
-                                    break
-
-                        # 3. Check if subject matches subject_type
-                        subj_type_raw = ax.get("subject_type")
-                        if is_match and subj_type_raw and subj_type_raw != "Any":
-                            subj_cls = getattr(self.onto, subj_type_raw, None)
-                            if not subj_cls:
-                                subj_cls = getattr(
-                                    self.onto,
-                                    canonical_concept_name(subj_type_raw),
-                                    None,
-                                )
-
-                            if not subj_cls:
-                                norm_subj = (
-                                    subj_type_raw.lower()
+                        if not subj_cls:
+                            norm_subj = (
+                                subj_type_raw.lower()
+                                .replace("_", "")
+                                .replace("concept", "")
+                            )
+                            for c in self.onto.classes():
+                                norm_c = (
+                                    c.name.lower()
                                     .replace("_", "")
                                     .replace("concept", "")
                                 )
-                                for c in self.onto.classes():
-                                    norm_c = (
-                                        c.name.lower()
-                                        .replace("_", "")
-                                        .replace("concept", "")
-                                    )
-                                    if norm_c == norm_subj:
-                                        subj_cls = c
-                                        break
+                                if norm_c == norm_subj:
+                                    subj_cls = c
+                                    break
 
-                            subj_ind = self.onto.search_one(iri=f"*{subject_name}")
-                            if not subj_ind:
-                                for ind in self.onto.individuals():
-                                    if ind.name.lower() == subject_name.lower():
-                                        subj_ind = ind
-                                        break
+                        subj_ind = self.onto.search_one(iri=f"*{subject_name}")
+                        if not subj_ind:
+                            for ind in self.onto.individuals():
+                                if ind.name.lower() == subject_name.lower():
+                                    subj_ind = ind
+                                    break
 
-                            subj_match = False
-                            if subj_ind and subj_cls:
-                                try:
-                                    if isinstance(subj_ind, subj_cls):
-                                        subj_match = True
-                                    else:
-                                        for cls in subj_ind.is_a:
-                                            if subj_cls == cls or (
-                                                isinstance(cls, owlready2.ThingClass)
-                                                and subj_cls in cls.ancestors()
-                                            ):
-                                                subj_match = True
-                                                break
-                                except TypeError:
-                                    subj_match = False
-                            elif subj_cls and (
-                                subject_name.lower() == subj_type_raw.lower()
-                                or subject_name.lower()
-                                == canonical_concept_name(subj_type_raw).lower()
-                            ):
-                                subj_match = True
+                        subj_match = False
+                        if subj_ind and subj_cls:
+                            try:
+                                if isinstance(subj_ind, subj_cls):
+                                    subj_match = True
+                                else:
+                                    for cls in subj_ind.is_a:
+                                        if subj_cls == cls or (
+                                            isinstance(cls, owlready2.ThingClass)
+                                            and subj_cls in cls.ancestors()
+                                        ):
+                                            subj_match = True
+                                            break
+                            except TypeError:
+                                subj_match = False
+                        elif subj_cls and (
+                            subject_name.lower() == subj_type_raw.lower()
+                            or subject_name.lower()
+                            == canonical_concept_name(subj_type_raw).lower()
+                        ):
+                            subj_match = True
 
-                            if not subj_match:
-                                is_match = False
+                        if not subj_match:
+                            is_match = False
 
-                        if is_match and ax.get("constraint") == "FORBIDDEN":
-                            is_forbidden = True
-                            blocking_axiom = ax.get("source_axiom")
-                            reasoning += (
-                                f" | Violation of {blocking_axiom}: "
-                                f"{subject_name} is a {subj_type_raw} and "
-                                f"{object_name} is a {obj_type_raw}."
-                            )
-                            break
+                    if is_match and ax.get("constraint") == "FORBIDDEN":
+                        is_forbidden = True
+                        blocking_axiom = ax.get("source_axiom")
+                        reasoning += (
+                            f" | Violation of {blocking_axiom}: "
+                            f"{subject_name} is a {subj_type_raw} and "
+                            f"{object_name} is a {obj_type_raw}."
+                        )
+                        break
 
         return {
             "permitted": not is_forbidden,

@@ -1,9 +1,11 @@
 """Paraclete Protocol implementation for HiPAI T1 Constraint Layer."""
 
 import logging
+import uuid
 from typing import Any
 
 from ._utils import canonical_concept_name, lemmatize_verb
+from .models import DeontologicalAxiom
 
 logger = logging.getLogger(__name__)
 
@@ -20,40 +22,48 @@ class ParacleteProtocol:
         self.ontology = world_model.ontology
 
     def incorporate_axiom(self, axiom: Any) -> None:
-        """
-        Store an immutable T1 deontological constraint in the graph.
-        """
-        axiom_data = axiom.model_dump() if not isinstance(axiom, dict) else axiom
+        """Store an immutable T1 deontological constraint in the graph."""
+        if isinstance(axiom, DeontologicalAxiom):
+            axiom_data = axiom.to_dict()
+        else:
+            axiom_data = dict(axiom)
 
-        # Sanitize relation_type to match how relations are stored
+        # Auto-generate axiom_id if missing to prevent FalkorDB errors
+        if "axiom_id" not in axiom_data:
+            axiom_data["axiom_id"] = f"ax_{uuid.uuid4().hex[:8]}"
+
         rel_sanitized = (
             lemmatize_verb(axiom_data["relation_type"]).upper().replace(" ", "_")
         )
         axiom_data["relation_type"] = rel_sanitized
 
-        # Canonicalize types to match Concept naming convention
-        if axiom_data.get("subject_type") and axiom_data["subject_type"] != "Any":
-            axiom_data["subject_type"] = canonical_concept_name(
-                axiom_data["subject_type"]
-            )
-        if axiom_data.get("object_type"):
+        # Canonicalize object_type and subject_type to match Concept naming
+        if "object_type" in axiom_data:
             axiom_data["object_type"] = canonical_concept_name(
                 axiom_data["object_type"]
             )
+        if "subject_type" in axiom_data and axiom_data["subject_type"] != "Any":
+            axiom_data["subject_type"] = canonical_concept_name(
+                axiom_data["subject_type"]
+            )
 
-        # MERGE on natural unique key (source_axiom + relation_type)
         q = """
-        MERGE (a:T1Constraint {source_axiom: $source_axiom,
-                               relation_type: $relation_type})
-        SET a.axiom_id = $axiom_id,
-            a.tier = $tier,
-            a.subject_type = $subject_type,
-            a.object_type = $object_type,
-            a.constraint = $constraint,
-            a.is_axiom = true
+        CREATE (a:T1Constraint {
+            axiom_id: $axiom_id,
+            source_axiom: $source_axiom,
+            relation_type: $relation_type,
+            subject_type: $subject_type,
+            object_type: $object_type,
+            tier: $tier,
+            constraint: $constraint
+        })
         """
         self.graph.query(q, params=axiom_data)
-        logger.debug("Incorporated axiom: %s", axiom_data.get("source_axiom"))
+        logger.info("Incorporated T1 Axiom: %s", axiom_data["axiom_id"])
+
+    def check_action(self, subject_id: str, relation: str, object_id: str) -> dict:
+        """Alias for check_constraint to match user spec."""
+        return self.check_constraint(subject_id, relation, object_id)
 
     def check_constraint(self, subject_id: str, relation: str, object_id: str) -> dict:
         """
@@ -73,7 +83,21 @@ class ParacleteProtocol:
         # 1.5 Retrieve custom axioms from FalkorDB
         q_axioms = "MATCH (a:T1Constraint) RETURN a"
         res_axioms = self.graph.query(q_axioms)
-        constraints = []
+
+        # Initialize with built-in Baseline Virtual Constraint
+        # This matches the user's requirement for a persistent T1 protection
+        constraints = [
+            {
+                "axiom_id": "BASELINE-HARM",
+                "source_axiom": "T1-HARMS-PROTECTION",
+                "relation_type": "HARM",
+                "object_type": "Concept_Patient",
+                "subject_type": "Any",
+                "tier": "T1",
+                "constraint": "FORBIDDEN",
+            }
+        ]
+
         if res_axioms.result_set:
             for row in res_axioms.result_set:
                 node = row[0]

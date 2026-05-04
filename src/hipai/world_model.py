@@ -242,6 +242,18 @@ class WorldModel:
                                 },
                             )
 
+                    # Universal properties: All X are [Adjective]
+                    for prop in individual.properties:
+                        self.graph.query(
+                            "MATCH (c1:Concept {name: $c1}) "
+                            "MERGE (c2:Concept {name: $c2}) "
+                            "MERGE (c1)-[:SUBCLASS_OF]->(c2)",
+                            params={
+                                "c1": concept_name,
+                                "c2": canonical_concept_name(prop),
+                            },
+                        )
+
                 if individual.quantifier == "no":
                     # Negative universal: No X are Y
                     props_to_process = []
@@ -618,6 +630,10 @@ class WorldModel:
     def incorporate_axiom(self, axiom: Any) -> None:
         """Store an immutable T1 deontological constraint in the graph."""
         self.paraclete.incorporate_axiom(axiom)
+
+    def check_action(self, subject_id: str, relation: str, object_id: str) -> dict:
+        """Check a proposed action triple against T1 FORBIDDEN axioms."""
+        return self.paraclete.check_action(subject_id, relation, object_id)
 
     def check_constraint(self, subject_id: str, relation: str, object_id: str) -> dict:
         """Check a proposed action triple against T1 FORBIDDEN axioms."""
