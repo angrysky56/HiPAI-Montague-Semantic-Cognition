@@ -143,7 +143,7 @@ class WorldModel:
             logger.error("Error clearing graph: %s", e)
 
     def clear_database(self):
-        """Clears the entire graph."""
+        """Clears the entire graph and reset the ontology."""
         try:
             self.graph.delete()
         except redis.exceptions.RedisError as e:
@@ -152,6 +152,7 @@ class WorldModel:
         # not the deleted one.
         self.graph = self.db.select_graph(self.graph_name)
         self._ensure_graph()
+        self.ontology.clear_ontology()
 
     def close(self):
         """Closes the world model connections, specifically the ontology."""

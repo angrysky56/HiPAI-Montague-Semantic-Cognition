@@ -39,8 +39,8 @@ class OntologyManager:
         if self.db_path != ":memory:":
             try:
                 pre_conn = sqlite3.connect(self.db_path, timeout=10.0)
-                mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
                 pre_conn.execute("PRAGMA busy_timeout = 10000")
+                mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
                 pre_conn.commit()
                 pre_conn.close()
                 if mode and mode[0] != "wal":
@@ -121,7 +121,8 @@ class OntologyManager:
             return None
 
         # 1. Try canonical name
-        cls = getattr(self.onto, canonical_concept_name(name), None)
+        canon_name = canonical_concept_name(name)
+        cls = getattr(self.onto, canon_name, None)
         if isinstance(cls, owlready2.ThingClass):
             return cls
 
@@ -130,7 +131,7 @@ class OntologyManager:
         if isinstance(cls, owlready2.ThingClass):
             return cls
 
-        # 3. Robust matching (fallback)
+        # 3. Robust matching (fallback) - case-insensitive
         norm_name = name.lower().replace("_", "").replace("concept", "")
         for c in self.onto.classes():
             norm_c = c.name.lower().replace("_", "").replace("concept", "")
@@ -153,41 +154,45 @@ class OntologyManager:
                 if individual.quantifier == "all":
                     # This represents a universal rule: All X are Y.
                     # Use lemmatised .name so OWL class names stay canonical.
-                    owl_name = individual.name.replace(" ", "_")
-                    base_cls = None
-                    for c in self.onto.classes():
-                        if (
-                            c.name.lower() == owl_name.lower()
-                            or c.name.lower() == f"concept_{owl_name.lower()}"
-                        ):
-                            base_cls = c
-                            break
+                    # 1. Try to find existing class
+                    canon_base = canonical_concept_name(individual.name)
+                    base_cls = getattr(self.onto, canon_base, None)
+                    if not isinstance(base_cls, owlready2.ThingClass):
+                        # Robust matching fallback
+                        for c in self.onto.classes():
+                            if c.name.lower() == canon_base.lower():
+                                base_cls = c
+                                break
+
                     if base_cls is None:
                         base_cls = type(
-                            canonical_concept_name(individual.name),
+                            canon_base,
                             (self.onto.Concept_Entity,),
                             {},
                         )
 
                     if individual.properties:
                         for prop in individual.properties:
-                            prop_name = prop.replace(" ", "_")
-                            target_cls = None
-                            for c in self.onto.classes():
-                                if (
-                                    c.name.lower() == prop_name.lower()
-                                    or c.name.lower() == f"concept_{prop_name.lower()}"
-                                ):
-                                    target_cls = c
-                                    break
+                            canon_target = canonical_concept_name(prop)
+                            target_cls = getattr(self.onto, canon_target, None)
+                            if not isinstance(target_cls, owlready2.ThingClass):
+                                for c in self.onto.classes():
+                                    if c.name.lower() == canon_target.lower():
+                                        target_cls = c
+                                        break
                             if target_cls is None:
                                 target_cls = type(
-                                    canonical_concept_name(prop),
+                                    canon_target,
                                     (self.onto.Concept_Entity,),
                                     {},
                                 )
 
-                            if target_cls not in base_cls.is_a:
+                            # Prevent inheritance cycles (self-inheritance or existing ancestor)
+                            if (
+                                target_cls != base_cls
+                                and target_cls not in base_cls.is_a
+                                and target_cls not in base_cls.ancestors()
+                            ):
                                 base_cls.is_a.append(target_cls)
                     continue
 
@@ -267,30 +272,62 @@ class OntologyManager:
                                 if norm_c == norm_target:
                                     target_class = c
                                     break
-                        if target_class is None:
-                            # Create class if not found — use canonical helper
-                            # If the name matches a seeded base class (e.g. Patient),
-                            # inherit from it to maintain baseline protections.
-                            base_parent = (
-                                self.get_onto_class(target_name)
-                                or self.onto.Concept_Entity
-                            )
 
-                            # Must use 'with self.onto' to add the class to the ontology namespace
-                            with self.onto:
-                                target_class = type(
-                                    canonical_concept_name(target_name),
-                                    (base_parent,),
-                                    {},
+                            if not target_class:
+                                base_parent = self.onto.Concept_Entity
+                                with self.onto:
+                                    target_class = type(
+                                        canonical_concept_name(target_name),
+                                        (base_parent,),
+                                        {},
+                                    )
+
+                        # 2. Check source
+                        source_obj = next(
+                            (i for i in obs.individuals if i.id == relation.source_id),
+                            None,
+                        )
+
+                        if source_obj and source_obj.quantifier == "all":
+                            # Universal Relation: All X are Y -> Concept_X is a subclass of Concept_Y
+                            source_class = self.get_onto_class(source_obj.name)
+                            if not source_class:
+                                with self.onto:
+                                    source_class = type(
+                                        canonical_concept_name(source_obj.name),
+                                        (self.onto.Concept_Entity,),
+                                        {},
+                                    )
+
+                            if (
+                                source_class
+                                and target_class
+                                and source_class != target_class
+                                and target_class not in source_class.is_a
+                                and target_class not in source_class.ancestors()
+                            ):
+                                source_class.is_a.append(target_class)
+                                logger.info(
+                                    "Universal Rule: %s IS_A %s",
+                                    source_class.name,
+                                    target_class.name,
                                 )
+                        else:
+                            # Individual Relation: Ty is a Human -> ty is an instance of Concept_Human
+                            source_ind = self.onto.search_one(
+                                iri=f"*{relation.source_id}"
+                            )
+                            if not source_ind and source_obj:
+                                source_name = source_obj.name
+                                source_ind = self.onto.search_one(iri=f"*{source_name}")
 
-                        if (
-                            source_ind
-                            and target_class
-                            and isinstance(target_class, owlready2.ThingClass)
-                            and target_class not in source_ind.is_a
-                        ):
-                            source_ind.is_a.append(target_class)
+                            if (
+                                source_ind
+                                and target_class
+                                and isinstance(target_class, owlready2.ThingClass)
+                                and target_class not in source_ind.is_a
+                            ):
+                                source_ind.is_a.append(target_class)
 
                     else:
                         target_name = relation.target_id.replace(" ", "_")
@@ -395,7 +432,8 @@ class OntologyManager:
                                 ):
                                     is_match = True
                                     break
-                    except TypeError:
+                    except TypeError as e:
+                        logger.error("TypeError in check_action: %s", e)
                         is_match = False
 
                     # 3. Check if subject matches subject_type
@@ -547,6 +585,31 @@ class OntologyManager:
     def save(self):
         """Saves the current world state to the SQLite DB."""
         self.world.save()
+
+    def clear_ontology(self):
+        """
+        Truly resets the ontology by clearing the world and re-seeding.
+        """
+        logger.info("Clearing ontology at %s", self.db_path)
+        # Close current world
+        self.world.close()
+
+        # Delete database file and related journal files
+        if self.db_path != ":memory:":
+            p = Path(self.db_path)
+            for suffix in ["", "-wal", "-shm", "-journal"]:
+                f = p.parent / (p.name + suffix)
+                if f.exists():
+                    try:
+                        f.unlink()
+                    except OSError as e:
+                        logger.error("Failed to delete %s: %s", f, e)
+
+        # Re-initialize
+        self.world = World(filename=self.db_path)
+        self.world.graph.db.execute("PRAGMA busy_timeout = 10000")
+        self.onto = self.init_world()
+        self.seed_axioms()
 
 
 if __name__ == "__main__":
