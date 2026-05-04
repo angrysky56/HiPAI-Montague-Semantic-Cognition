@@ -21,9 +21,11 @@ class ParacleteProtocol:
         self.graph = world_model.graph
         self.ontology = world_model.ontology
 
-    def incorporate_axiom(self, axiom: Any) -> None:
+    def incorporate_axiom(self, axiom: DeontologicalAxiom | dict) -> None:
         """Store an immutable T1 deontological constraint in the graph."""
-        if isinstance(axiom, DeontologicalAxiom):
+        if hasattr(axiom, "model_dump"):
+            axiom_data = axiom.model_dump()
+        elif hasattr(axiom, "to_dict"):
             axiom_data = axiom.to_dict()
         else:
             axiom_data = dict(axiom)
