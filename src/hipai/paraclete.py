@@ -11,6 +11,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+BASELINE_CONSTRAINTS = {
+    "T1-HARMS-PROTECTION": {
+        "axiom_id": "BASELINE-HARM",
+        "source_axiom": "T1-HARMS-PROTECTION",
+        "relation_type": "HARM",
+        "object_type": "Concept_Patient",
+        "subject_type": "Any",
+        "tier": "T1",
+        "constraint": "FORBIDDEN",
+    }
+}
+
 
 class ParacleteProtocol:
     """
@@ -88,19 +100,8 @@ class ParacleteProtocol:
         q_axioms = "MATCH (a:T1Constraint) RETURN a"
         res_axioms = self.graph.query(q_axioms)
 
-        # Initialize with built-in Baseline Virtual Constraint
-        # This matches the user's requirement for a persistent T1 protection
-        constraints = [
-            {
-                "axiom_id": "BASELINE-HARM",
-                "source_axiom": "T1-HARMS-PROTECTION",
-                "relation_type": "HARM",
-                "object_type": "Concept_Patient",
-                "subject_type": "Any",
-                "tier": "T1",
-                "constraint": "FORBIDDEN",
-            }
-        ]
+        # Initialize with built-in Baseline Virtual Constraints
+        constraints = list(BASELINE_CONSTRAINTS.values())
 
         if res_axioms.result_set:
             for row in res_axioms.result_set:
@@ -131,15 +132,20 @@ class ParacleteProtocol:
         ).result_set
 
         if not axiom_rows:
-            return {
-                "verdict": "BLOCK_CONFIRMED",
-                "reasoning": f"Axiom {blocking_axiom} not found — cannot calibrate.",
-                "confirmed_evidence": [],
-                "disconfirming_evidence": [],
-                "source_count": 0,
-            }
-
-        protected_type = axiom_rows[0][0]
+            # Check virtual baseline axioms
+            if blocking_axiom in BASELINE_CONSTRAINTS:
+                virtual = BASELINE_CONSTRAINTS[blocking_axiom]
+                protected_type = virtual["object_type"]
+            else:
+                return {
+                    "verdict": "BLOCK_CONFIRMED",
+                    "reasoning": f"Axiom {blocking_axiom} not found — cannot calibrate.",
+                    "confirmed_evidence": [],
+                    "disconfirming_evidence": [],
+                    "source_count": 0,
+                }
+        else:
+            protected_type = axiom_rows[0][0]
         # Strip Concept_ prefix if present for property lookup
         lookup_type = protected_type
         if lookup_type.startswith("Concept_"):
@@ -288,17 +294,23 @@ class ParacleteProtocol:
         axiom_rows = self.graph.query(
             q_axiom, params={"blocking_axiom": blocking_axiom}
         ).result_set
-        if not axiom_rows:
-            return {
-                "final_ruling": "FINAL_BLOCK",
-                "resolution_path": "AXIOM_NOT_FOUND",
-                "reasoning": f"Axiom {blocking_axiom} missing.",
-                "resolution_log": [],
-                "new_evidence": [],
-                "conservative_default": True,
-            }
 
-        protected_type = axiom_rows[0][0]
+        if not axiom_rows:
+            # Check virtual baseline axioms
+            if blocking_axiom in BASELINE_CONSTRAINTS:
+                virtual = BASELINE_CONSTRAINTS[blocking_axiom]
+                protected_type = virtual["object_type"]
+            else:
+                return {
+                    "final_ruling": "FINAL_BLOCK",
+                    "resolution_path": "AXIOM_NOT_FOUND",
+                    "reasoning": f"Axiom {blocking_axiom} missing.",
+                    "resolution_log": [],
+                    "new_evidence": [],
+                    "conservative_default": True,
+                }
+        else:
+            protected_type = axiom_rows[0][0]
         # Strip Concept_ prefix if present for property lookup
         lookup_type = protected_type
         if lookup_type.startswith("Concept_"):
