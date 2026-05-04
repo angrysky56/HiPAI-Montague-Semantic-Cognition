@@ -32,19 +32,34 @@ class OntologyManager:
         )
 
         # Retry logic for locked database
-        retries = 5
-        while retries > 0:
+        retries = 10
+        attempt = 0
+        while attempt < retries:
             try:
                 self.world = World(filename=self.db_path)
-                # Set a longer busy timeout (5 seconds) for future operations
-                self.world.graph.db.execute("PRAGMA busy_timeout = 5000")
+                # Set a longer busy timeout (10 seconds) for future operations
+                self.world.graph.db.execute("PRAGMA busy_timeout = 10000")
                 break
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-                if "locked" in str(e).lower() and retries > 1:
-                    logger.warning("Database %s is locked, retrying...", self.db_path)
-                    time.sleep(1)
-                    retries -= 1
+                attempt += 1
+                if "locked" in str(e).lower() and attempt < retries:
+                    # Exponential backoff with a bit of jitter
+                    sleep_time = min(attempt * 0.5, 5)
+                    logger.warning(
+                        "Database %s is locked (attempt %d/%d), retrying in %.1fs...",
+                        self.db_path,
+                        attempt,
+                        retries,
+                        sleep_time,
+                    )
+                    time.sleep(sleep_time)
                 else:
+                    logger.error(
+                        "Database %s is locked and failed after %d retries. "
+                        "Check for orphan processes holding the lock.",
+                        self.db_path,
+                        retries,
+                    )
                     raise e
             except Exception as e:
                 logger.exception("Unexpected error initializing world: %s", e)

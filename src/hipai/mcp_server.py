@@ -1,5 +1,6 @@
 """Module for MCP server integration with HiPAI."""
 
+import atexit
 import json
 import logging
 from collections.abc import Callable
@@ -17,6 +18,9 @@ mcp = FastMCP("HiPAI Server")
 # Initialize HIPAIManager
 # This instance manages both WorldModel and Synthesizer
 hi_pai = HIPAIManager(graph_name="hipai_world")
+
+# Register shutdown hook
+atexit.register(hi_pai.close)
 
 
 # Configure logger
@@ -391,4 +395,7 @@ async def escalate_block(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        hi_pai.close()
