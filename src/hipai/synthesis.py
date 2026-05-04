@@ -17,6 +17,7 @@ Synthesizer Module
 import logging
 from typing import Any
 
+from ._utils import canonical_concept_name, lemmatize_verb
 from .models import DeontologicalAxiom, Individual, Observation
 from .parser import ClaimExtractor
 from .world_model import WorldModel
@@ -73,7 +74,7 @@ class ZettelkastenSynthesizer:
         try:
             result = self.world_model.query_graph(query_keys)
         except Exception as e:
-            logger.error("Failed to query graph: %s", e)
+            logger.exception("Failed to query graph for concepts: %s", e)
             return []  # In case the graph doesn't exist
 
         all_props = set()
@@ -93,7 +94,7 @@ class ZettelkastenSynthesizer:
             entities = [r[0] for r in res]
 
             if len(entities) >= property_threshold:
-                concept_name = f"Concept_{prop.capitalize()}"
+                concept_name = canonical_concept_name(prop)
                 self.world_model.create_structure_note(concept_name, entities)
                 created_concepts.append(concept_name)
 
@@ -151,7 +152,7 @@ class ZettelkastenSynthesizer:
         try:
             res = self.world_model.query_graph(q, {"threshold": concept_threshold})
         except Exception as e:
-            logger.error("Failed to query graph for domains: %s", e)
+            logger.exception("Failed to query graph for domains: %s", e)
             return []
 
         domains_created = []
@@ -165,76 +166,12 @@ class ZettelkastenSynthesizer:
         return domains_created
 
 
-# Map of verb forms to their canonical base/stem for relation type matching.
-VERB_STEM_OVERRIDES: dict[str, str] = {
-    "causes": "cause",
-    "leads": "lead",
-    "produces": "produce",
-    "creates": "create",
-    "triggers": "trigger",
-    "generates": "generate",
-    "enables": "enable",
-    "prevents": "prevent",
-    "blocks": "block",
-    "inhibits": "inhibit",
-    "harms": "harm",
-    "exploits": "exploit",
-    "manipulates": "manipulate",
-    "influences": "influence",
-    "affects": "affect",
-    "impacts": "impact",
-    "shapes": "shape",
-    "alters": "alter",
-    "modifies": "modify",
-    "requires": "require",
-    "needs": "need",
-    "supports": "support",
-    "confirms": "confirm",
-    "contradicts": "contradict",
-    "challenges": "challenge",
-    "undermines": "undermine",
-    "visits": "visit",
-    "sees": "see",
-    "meets": "meet",
-    "calls": "call",
-    "loves": "love",
-    "hates": "hate",
-}
-
-
 class HIPAIManager:
     """
     High-level manager for the Montague-style semantic cognition system.
     Orchestrates the WorldModel and ZettelkastenSynthesizer.
     This class provides the interface expected by test_hipai.py.
     """
-
-    @staticmethod
-    def _normalize_verb(verb: str) -> str:
-        """Normalize an inflected verb to its base/stem form for relation type creation.
-
-        Uses an explicit override table for known verbs, then falls back to
-        simple suffix stripping (``-es`` → ``-e``, ``-s`` → base).
-        """
-        v = verb.lower().strip()
-        if v in VERB_STEM_OVERRIDES:
-            return VERB_STEM_OVERRIDES[v]
-        # Fallback heuristics
-        if v.endswith("ies"):  # e.g. "relies" → "rely"
-            return v[:-3] + "y"
-        if (
-            v.endswith("ses")
-            or v.endswith("zes")
-            or v.endswith("xes")
-            or v.endswith("ches")
-            or v.endswith("shes")
-        ):
-            return v[:-2]  # e.g. "causes" already handled above
-        if v.endswith("es"):
-            return v[:-1]  # e.g. "produces" → "produce"
-        if v.endswith("s") and not v.endswith("ss"):
-            return v[:-1]  # e.g. "harms" → "harm"
-        return v
 
     def __init__(
         self,
@@ -331,7 +268,7 @@ class HIPAIManager:
         try:
             obs = self.parser.extract(text)
         except Exception as e:
-            self.logger.error("Parser failed for '%s': %s", text, e)
+            self.logger.exception("Parser failed for '%s': %s", text, e)
             return {"status": "error", "message": f"Parsing failed: {e}"}
 
         # 1.5 Resolve Ambiguity (Context-Aware Entity Linking)
@@ -363,8 +300,9 @@ class HIPAIManager:
         # We check every relation in the observation against the T1 WorldModel
 
         for rel in obs.relations:
+            rel_lemma = lemmatize_verb(rel.relation_type)
             res = self.world_model.check_constraint(
-                rel.source_id, rel.relation_type, rel.target_id
+                rel.source_id, rel_lemma, rel.target_id
             )
             if not res["permitted"]:
                 self.logger.warning("Constraint Violation: %s", res["reasoning"])
@@ -408,9 +346,27 @@ class HIPAIManager:
             ]
             return {"nodes": nodes, "edges": edges}
         except Exception as e:
+            self.logger.exception("Error getting current state: %s", e)
             return {"error": str(e)}
 
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
+        """
+        Evaluates a natural language hypothesis against the current knowledge graph.
+
+        This method parses the hypothesis into its semantic components and checks
+        if the state of the World Model entails, contradicts, or leaves the
+        hypothesis undetermined. It supports property assignments, class
+        memberships, and relational links.
+
+        Args:
+            hypothesis: The natural language sentence to evaluate.
+
+        Returns:
+            A dictionary containing:
+                - entailment: "Entailed", "Contradicted", or "Undetermined"
+                - evidence: A natural language explanation of the finding
+                - logical_form: The formal representation of the hypothesis
+        """
 
         # Parse the hypothesis without incorporating it
         parse_res = self.add_belief(hypothesis, incorporate=False)
@@ -705,6 +661,7 @@ class HIPAIManager:
             )
             return {"status": "success", "message": f"Axiom {axiom_id} stored."}
         except Exception as e:
+            self.logger.exception("Failed to incorporate axiom: %s", e)
             return {"status": "error", "message": str(e)}
 
     def check_constraint(self, subject_id: str, relation: str, object_id: str) -> dict:

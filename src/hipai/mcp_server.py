@@ -1,6 +1,7 @@
 """Module for MCP server integration with HiPAI."""
 
 import json
+import logging
 
 from mcp.server.fastmcp import FastMCP
 
@@ -13,6 +14,9 @@ mcp = FastMCP("HiPAI Server")
 # Initialize HIPAIManager
 # This instance manages both WorldModel and Synthesizer
 hi_pai = HIPAIManager(graph_name="hipai_world")
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 @mcp.tool()
@@ -30,6 +34,7 @@ async def add_belief(text: str) -> str:
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
+        logger.exception("Unexpected error in add_belief: %s", e)
         return json.dumps({"status": "error", "message": f"Unexpected error: {e!s}"})
 
 
@@ -46,6 +51,7 @@ async def evaluate_hypothesis(hypothesis: str) -> str:
             f"Logical Form: {res['logical_form']}"
         )
     except Exception as e:
+        logger.exception("Error evaluating hypothesis: %s", e)
         return f"Error evaluating hypothesis: {e!s}"
 
 
@@ -60,6 +66,7 @@ async def query_graph(cypher: str) -> str:
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
+        logger.exception("Error executing query: %s", e)
         return f"Error executing query: {e!s}"
 
 
@@ -75,6 +82,7 @@ async def synthesize_concepts(property_threshold: int = 1) -> str:
         )
         return f"Synthesized Concepts: {', '.join(created) if created else 'None'}"
     except Exception as e:
+        logger.exception("Error synthesizing concepts: %s", e)
         return f"Error synthesizing concepts: {e!s}"
 
 
@@ -89,6 +97,7 @@ async def vector_synthesize_concepts(n_clusters: int = 2) -> str:
             f"Synthesized Latent Concepts: {', '.join(created) if created else 'None'}"
         )
     except Exception as e:
+        logger.exception("Error synthesizing vector concepts: %s", e)
         return f"Error synthesizing vector concepts: {e!s}"
 
 
@@ -104,6 +113,7 @@ async def synthesize_domains(concept_threshold: int = 1) -> str:
         )
         return f"Synthesized Domains: {', '.join(created) if created else 'None'}"
     except Exception as e:
+        logger.exception("Error synthesizing domains: %s", e)
         return f"Error synthesizing domains: {e!s}"
 
 
@@ -133,6 +143,7 @@ async def ingest_observation(
         hi_pai.world_model.incorporate_observation(obs)
         return "Observation successfully ingested."
     except Exception as e:
+        logger.exception("Error ingesting observation: %s", e)
         return f"Error ingesting observation: {e!s}"
 
 
@@ -151,6 +162,7 @@ async def semantic_search(
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
+        logger.exception("Error executing semantic search: %s", e)
         return f"Error executing semantic search: {e!s}"
 
 
@@ -161,6 +173,7 @@ async def clear_graph() -> str:
         hi_pai.clear_database()
         return "Graph database cleared."
     except Exception as e:
+        logger.exception("Error clearing graph: %s", e)
         return f"Error clearing graph: {e!s}"
 
 
@@ -175,6 +188,7 @@ async def get_current_state() -> str:
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
+        logger.exception("Error getting state: %s", e)
         return f"Error getting state: {e!s}"
 
 
@@ -218,6 +232,7 @@ async def incorporate_axiom(
             default=lambda x: x.model_dump() if hasattr(x, "model_dump") else str(x),
         )
     except Exception as e:
+        logger.exception("Error incorporating axiom: %s", e)
         return f"Error incorporating axiom: {e!s}"
 
 
@@ -265,6 +280,7 @@ async def check_action(subject_id: str, relation: str, object_id: str) -> str:
         )
         return routing_block
     except Exception as e:
+        logger.exception("Error checking action: %s", e)
         return f"Error checking action: {e!s}"
 
 
@@ -327,6 +343,7 @@ async def calibrate_belief(object_id: str, blocking_axiom: str, relation: str) -
         )
         return report
     except Exception as e:
+        logger.exception("Error calibrating belief: %s", e)
         return f"Error calibrating belief: {e!s}"
 
 
@@ -395,6 +412,7 @@ async def escalate_block(
         )
         return report
     except Exception as e:
+        logger.exception("Error in escalation routing: %s", e)
         return f"Error in escalation routing: {e!s}"
 
 

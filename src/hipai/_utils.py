@@ -1,4 +1,36 @@
-"""Shared utility helpers for HiPAI internals."""
+import os
+
+import spacy
+
+_nlp = None
+
+
+def get_nlp(model: str = "en_core_web_md"):
+    """
+    Lazy-load and return a shared spaCy NLP model.
+    Downloads the model if it's missing.
+    """
+    global _nlp
+    if _nlp is None:
+        try:
+            _nlp = spacy.load(model)
+        except OSError:
+            # trunk-ignore(bandit/B605)
+            os.system(f"python -m spacy download {model}")
+            _nlp = spacy.load(model)
+    return _nlp
+
+
+def lemmatize_verb(verb: str) -> str:
+    """
+    Normalise an inflected verb to its base/stem form using spaCy.
+    Handles plurals, past tense, and third-person singular automatically.
+    """
+    nlp = get_nlp()
+    doc = nlp(verb.lower().strip())
+    if not doc or len(doc) == 0:
+        return verb.lower().strip()
+    return doc[0].lemma_.lower().strip()
 
 
 def canonical_concept_name(raw: str) -> str:

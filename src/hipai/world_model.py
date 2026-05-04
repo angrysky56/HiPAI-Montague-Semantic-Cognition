@@ -1,6 +1,5 @@
 """Module for managing the FalkorDB-based world model for HiPAI."""
 
-import contextlib
 import logging
 import os
 import uuid
@@ -13,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 # as we use CPU for the small embedding model
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-from ._utils import canonical_concept_name
+from ._utils import canonical_concept_name, lemmatize_verb
 from .models import DeontologicalAxiom, Observation
 from .ontology_manager import OntologyManager
 
@@ -66,10 +65,12 @@ class WorldModel:
                 _EMBEDDING_MODEL = SentenceTransformer(
                     model_name, device="cpu", local_files_only=True
                 )
-            except Exception:
+            except Exception as e:
                 # Fallback to online load if not in cache
-                logger.info(
-                    f"Model '{model_name}' not found in cache. Downloading from hub..."
+                logger.warning(
+                    "Model '%s' not found locally or failed to load: %s. Downloading...",
+                    model_name,
+                    e,
                 )
                 _EMBEDDING_MODEL = SentenceTransformer(model_name, device="cpu")
         self.embedding_model = _EMBEDDING_MODEL
@@ -129,12 +130,14 @@ class WorldModel:
         try:
             self.graph.query("MATCH (n) DETACH DELETE n")
         except Exception as e:
-            logger.error("Error clearing graph: %s", e)
+            logger.exception("Error clearing graph: %s", e)
 
     def clear_database(self):
         """Clears the entire graph."""
-        with contextlib.suppress(Exception):
+        try:
             self.graph.delete()
+        except Exception as e:
+            logger.debug("Graph deletion skipped or failed (might not exist): %s", e)
         self._ensure_graph()
 
     def close(self):
@@ -383,11 +386,8 @@ class WorldModel:
         for relation in obs.relations:
             # relation: <e, <e, t>>
             source = relation.source_id
-            rel_type = "".join(
-                c
-                for c in relation.relation_type.upper().replace(" ", "_")
-                if c.isalnum() or c == "_"
-            )
+            # Sanitize relation type: Uppercase lemma is standard for Neo4j rel types
+            rel_type = lemmatize_verb(relation.relation_type).upper().replace(" ", "_")
 
             if relation.target_observation:
                 # 1. Incorporate nested observation recursively
@@ -540,7 +540,7 @@ class WorldModel:
             return scored_nodes
 
         except Exception as e:
-            logger.error("Semantic search failed: %s", e)
+            logger.exception("Semantic search failed: %s", e)
             return []
 
     # ==========================================
@@ -566,6 +566,7 @@ class WorldModel:
     def create_structure_note(self, concept_name: str, describes_entities: list[str]):
         """Tier 2: Organizes Content Nodes."""
         # Create Concept Node
+        concept_name = canonical_concept_name(concept_name)
         query = (
             "MERGE (c:StructureNote:Concept {name: $name}) "
             "SET c.embedding = vecf32($embedding)"
@@ -621,10 +622,8 @@ class WorldModel:
         axiom_data = axiom.model_dump() if not isinstance(axiom, dict) else axiom
 
         # Sanitize relation_type to match how relations are stored
-        rel_sanitized = "".join(
-            c
-            for c in axiom_data["relation_type"].upper().replace(" ", "_")
-            if c.isalnum() or c == "_"
+        rel_sanitized = (
+            lemmatize_verb(axiom_data["relation_type"]).upper().replace(" ", "_")
         )
         axiom_data["relation_type"] = rel_sanitized
 
@@ -656,6 +655,9 @@ class WorldModel:
         subj_name = subj_res.result_set[0][0] if subj_res.result_set else subject_id
         obj_name = obj_res.result_set[0][0] if obj_res.result_set else object_id
 
+        # 1.2 Lemmatise relation
+        rel_lemma = lemmatize_verb(relation)
+
         # 1.5 Retrieve custom axioms from FalkorDB
         q_axioms = "MATCH (a:T1Constraint) RETURN a"
         res_axioms = self.graph.query(q_axioms)
@@ -670,7 +672,7 @@ class WorldModel:
 
         # 2. Delegate to OWL reasoning
         return self.ontology.check_action(
-            subj_name, relation, obj_name, constraints=constraints
+            subj_name, rel_lemma, obj_name, constraints=constraints
         )
 
     def calibrate_belief(

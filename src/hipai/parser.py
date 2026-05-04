@@ -1,19 +1,10 @@
-import os
-
-import spacy
-
+from ._utils import get_nlp
 from .models import Individual, Observation, Relation
 
 
 class ClaimExtractor:
     def __init__(self, model: str = "en_core_web_md"):
-        try:
-            self.nlp = spacy.load(model)
-        except OSError:
-
-            # trunk-ignore(bandit/B605)
-            os.system(f"python -m spacy download {model}")
-            self.nlp = spacy.load(model)
+        self.nlp = get_nlp(model)
 
     def extract(self, text: str) -> Observation:
         doc = self.nlp(text)

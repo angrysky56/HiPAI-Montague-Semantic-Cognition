@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import owlready2
 from owlready2 import World
 
-from ._utils import canonical_concept_name
+from ._utils import canonical_concept_name, lemmatize_verb
 
 if TYPE_CHECKING:
     from .models import Observation
@@ -60,8 +60,8 @@ class OntologyManager:
         if hasattr(self, "world"):
             try:
                 self.world.close()
-            except (sqlite3.Error, Exception) as e:
-                logger.warning("Error closing world: %s", e)
+            except Exception as e:
+                logger.error("Error closing world: %s", e, exc_info=True)
 
     def init_world(self, onto_iri: str = "http://hipai.org/ontology"):
         """
@@ -283,16 +283,16 @@ class OntologyManager:
         Uses Owlready2 to verify if the subject and object match the
         categories defined in the constraints.
         """
-        rel_lower = relation_name.lower()
+        rel_lemma = lemmatize_verb(relation_name)
         is_forbidden = False
         blocking_axiom = None
-        reasoning = f"Checking action: {subject_name} {rel_lower} {object_name}"
+        reasoning = f"Checking action: {subject_name} {rel_lemma} {object_name}"
 
         # If no constraints provided, use the hardcoded baseline for backward
         # compatibility but the goal is to always pass constraints from WorldModel.
         if not constraints:
-            # Baseline: Agents should not harm Patients
-            if rel_lower in ["harms", "harm"]:
+            # Baseline protections: HARM is always forbidden if object is a Patient
+            if rel_lemma == "harm":
                 obj_ind = self.onto.search_one(iri=f"*{object_name.replace(' ', '_')}")
                 if obj_ind:
                     # Force a list to avoid iterator issues
@@ -310,16 +310,9 @@ class OntologyManager:
                         )
         else:
             for ax in constraints:
-                # 1. Match relation type (normalized)
-                ax_rel = ax.get("relation_type", "").lower()
-                if (
-                    ax_rel != rel_lower
-                    and ax_rel != rel_lower + "s"
-                    and not (
-                        (ax_rel == "harm" and rel_lower == "harms")
-                        or (ax_rel == "harms" and rel_lower == "harm")
-                    )
-                ):
+                # 1. Match relation type (lemmatised)
+                ax_rel = lemmatize_verb(ax.get("relation_type", ""))
+                if ax_rel != rel_lemma:
                     continue
 
                 # 2. Check if object matches object_type
