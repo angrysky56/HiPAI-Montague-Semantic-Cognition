@@ -335,27 +335,20 @@ class OntologyManager:
 
                 # 2. Check if object matches object_type
                 # We prioritize object_type for T1 protections (Patient-centric)
-                obj_type = ax.get("object_type")
-                if obj_type:
-                    obj_ind = self.onto.search_one(iri=f"*{object_name}")
-                    if not obj_ind:
-                        # Try case-insensitive
-                        for ind in self.onto.individuals():
-                            if ind.name.lower() == object_name.lower():
-                                obj_ind = ind
-                                break
-
-                    # Get the class from the ontology
-                    protected_cls = getattr(self.onto, obj_type, None)
+                obj_type_raw = ax.get("object_type")
+                if obj_type_raw:
+                    # Lookup with both raw and canonical names
+                    protected_cls = getattr(self.onto, obj_type_raw, None)
                     if not protected_cls:
-                        # Try canonical name
                         protected_cls = getattr(
-                            self.onto, canonical_concept_name(obj_type), None
+                            self.onto, canonical_concept_name(obj_type_raw), None
                         )
 
                     if not protected_cls:
                         # Robust matching: lowercase and strip underscores
-                        norm_obj = obj_type.lower().replace("_", "")
+                        norm_obj = (
+                            obj_type_raw.lower().replace("_", "").replace("concept", "")
+                        )
                         for c in self.onto.classes():
                             norm_c = (
                                 c.name.lower().replace("_", "").replace("concept", "")
@@ -364,24 +357,22 @@ class OntologyManager:
                                 protected_cls = c
                                 break
 
-                    if obj_ind and protected_cls:
+                    obj_ind = self.onto.search_one(iri=f"*{object_name}")
+                    if not obj_ind:
+                        # Try case-insensitive
+                        for ind in self.onto.individuals():
+                            if ind.name.lower() == object_name.lower():
+                                obj_ind = ind
+                                break
 
-                        # Recursive check for class membership.
-                        # Guard isinstance() — protected_cls must be a Python type.
-                        # If owlready2 returned an individual or property instead of a
-                        # class, isinstance() raises TypeError; treat as no-match.
+                    if obj_ind and protected_cls:
+                        # Recursive check for class membership
                         try:
                             is_match = isinstance(obj_ind, protected_cls)
                         except TypeError:
-                            logger.debug(
-                                "isinstance check skipped: protected_cls %r is not a "
-                                "Python type (owlready2 returned non-class object).",
-                                protected_cls,
-                            )
                             is_match = False
+
                         if not is_match:
-                            # Owlready2 sometimes needs manual check of ancestors
-                            # for dynamic classes
                             for cls in obj_ind.is_a:
                                 if protected_cls == cls or (
                                     isinstance(cls, owlready2.ThingClass)
@@ -391,20 +382,22 @@ class OntologyManager:
                                     break
 
                         # 3. Check if subject matches subject_type
-                        subj_type = ax.get("subject_type")
-                        if is_match and subj_type and subj_type != "Any":
-                            subj_ind = self.onto.search_one(iri=f"*{subject_name}")
-                            if not subj_ind:
-                                # Try case-insensitive
-                                for ind in self.onto.individuals():
-                                    if ind.name.lower() == subject_name.lower():
-                                        subj_ind = ind
-                                        break
-
-                            # Find the subject class
-                            subj_cls = getattr(self.onto, subj_type, None)
+                        subj_type_raw = ax.get("subject_type")
+                        if is_match and subj_type_raw and subj_type_raw != "Any":
+                            subj_cls = getattr(self.onto, subj_type_raw, None)
                             if not subj_cls:
-                                norm_subj = subj_type.lower().replace("_", "")
+                                subj_cls = getattr(
+                                    self.onto,
+                                    canonical_concept_name(subj_type_raw),
+                                    None,
+                                )
+
+                            if not subj_cls:
+                                norm_subj = (
+                                    subj_type_raw.lower()
+                                    .replace("_", "")
+                                    .replace("concept", "")
+                                )
                                 for c in self.onto.classes():
                                     norm_c = (
                                         c.name.lower()
@@ -413,6 +406,13 @@ class OntologyManager:
                                     )
                                     if norm_c == norm_subj:
                                         subj_cls = c
+                                        break
+
+                            subj_ind = self.onto.search_one(iri=f"*{subject_name}")
+                            if not subj_ind:
+                                for ind in self.onto.individuals():
+                                    if ind.name.lower() == subject_name.lower():
+                                        subj_ind = ind
                                         break
 
                             subj_match = False
@@ -430,9 +430,11 @@ class OntologyManager:
                                                 break
                                 except TypeError:
                                     subj_match = False
-                            elif subj_cls and subject_name.lower() == subj_type.lower():
-                                # Handle case where individual isn't in OWL yet but
-                                # name matches. This is common for "Agent" or seeded.
+                            elif subj_cls and (
+                                subject_name.lower() == subj_type_raw.lower()
+                                or subject_name.lower()
+                                == canonical_concept_name(subj_type_raw).lower()
+                            ):
                                 subj_match = True
 
                             if not subj_match:
@@ -443,8 +445,8 @@ class OntologyManager:
                             blocking_axiom = ax.get("source_axiom")
                             reasoning += (
                                 f" | Violation of {blocking_axiom}: "
-                                f"{subject_name} is a {subj_type} and "
-                                f"{object_name} is a {obj_type}."
+                                f"{subject_name} is a {subj_type_raw} and "
+                                f"{object_name} is a {obj_type_raw}."
                             )
                             break
 

@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from ._utils import lemmatize_verb
+from ._utils import canonical_concept_name, lemmatize_verb
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,16 @@ class ParacleteProtocol:
             lemmatize_verb(axiom_data["relation_type"]).upper().replace(" ", "_")
         )
         axiom_data["relation_type"] = rel_sanitized
+
+        # Canonicalize types to match Concept naming convention
+        if axiom_data.get("subject_type") and axiom_data["subject_type"] != "Any":
+            axiom_data["subject_type"] = canonical_concept_name(
+                axiom_data["subject_type"]
+            )
+        if axiom_data.get("object_type"):
+            axiom_data["object_type"] = canonical_concept_name(
+                axiom_data["object_type"]
+            )
 
         # MERGE on natural unique key (source_axiom + relation_type)
         q = """
@@ -102,11 +112,16 @@ class ParacleteProtocol:
             }
 
         protected_type = axiom_rows[0][0]
+        # Strip Concept_ prefix if present for property lookup
+        lookup_type = protected_type
+        if lookup_type.startswith("Concept_"):
+            lookup_type = lookup_type[len("Concept_") :]
+
         obj_type_sanitized = "".join(
             c
-            for c in protected_type.replace(" ", "_").replace("-", "_")
+            for c in lookup_type.replace(" ", "_").replace("-", "_")
             if c.isalnum() or c == "_"
-        )
+        ).lower()
 
         confirmed_evidence = []
         disconfirming_evidence = []
@@ -256,11 +271,16 @@ class ParacleteProtocol:
             }
 
         protected_type = axiom_rows[0][0]
+        # Strip Concept_ prefix if present for property lookup
+        lookup_type = protected_type
+        if lookup_type.startswith("Concept_"):
+            lookup_type = lookup_type[len("Concept_") :]
+
         obj_type_sanitized = "".join(
             c
-            for c in protected_type.replace(" ", "_").replace("-", "_")
+            for c in lookup_type.replace(" ", "_").replace("-", "_")
             if c.isalnum() or c == "_"
-        )
+        ).lower()
 
         if verdict == "BLOCK_CHALLENGED":
             # PATH A: CONTRADICTION_RESOLUTION
