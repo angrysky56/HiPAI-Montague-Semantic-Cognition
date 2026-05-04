@@ -2,10 +2,12 @@
 
 import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._utils import canonical_concept_name, lemmatize_verb
-from .models import DeontologicalAxiom
+
+if TYPE_CHECKING:
+    from .models import DeontologicalAxiom
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,7 @@ class ParacleteProtocol:
         self.graph = world_model.graph
         self.ontology = world_model.ontology
 
-    def incorporate_axiom(self, axiom: DeontologicalAxiom | dict) -> None:
+    def incorporate_axiom(self, axiom: "DeontologicalAxiom | dict") -> None:
         """Store an immutable T1 deontological constraint in the graph."""
         if hasattr(axiom, "model_dump"):
             axiom_data = axiom.model_dump()

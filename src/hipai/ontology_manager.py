@@ -34,13 +34,17 @@ class OntologyManager:
         # Retry logic for locked database
         retries = 10
         attempt = 0
+        last_err = None
         while attempt < retries:
             try:
                 self.world = World(filename=self.db_path)
                 # Set a longer busy timeout (10 seconds) for future operations
                 self.world.graph.db.execute("PRAGMA busy_timeout = 10000")
+                # Use WAL mode for better concurrency
+                self.world.graph.db.execute("PRAGMA journal_mode = WAL")
                 break
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+                last_err = e
                 attempt += 1
                 if "locked" in str(e).lower() and attempt < retries:
                     # Exponential backoff with a bit of jitter
@@ -58,9 +62,9 @@ class OntologyManager:
                         "Database %s is locked and failed after %d retries. "
                         "Check for orphan processes holding the lock.",
                         self.db_path,
-                        retries,
+                        attempt,
                     )
-                    raise e
+                    raise last_err from e
             except Exception as e:
                 logger.exception("Unexpected error initializing world: %s", e)
                 raise e
@@ -90,6 +94,32 @@ class OntologyManager:
         ontology.load()
         return ontology
 
+    def get_onto_class(self, name: str) -> owlready2.ThingClass | None:
+        """
+        Retrieves a class from the ontology by name, trying both raw and canonical names.
+        """
+        if not name:
+            return None
+
+        # 1. Try canonical name
+        cls = getattr(self.onto, canonical_concept_name(name), None)
+        if isinstance(cls, owlready2.ThingClass):
+            return cls
+
+        # 2. Try raw name
+        cls = getattr(self.onto, name, None)
+        if isinstance(cls, owlready2.ThingClass):
+            return cls
+
+        # 3. Robust matching (fallback)
+        norm_name = name.lower().replace("_", "").replace("concept", "")
+        for c in self.onto.classes():
+            norm_c = c.name.lower().replace("_", "").replace("concept", "")
+            if norm_c == norm_name:
+                return c
+
+        return None
+
     def add_observation(self, obs: "Observation") -> owlready2.Thing | None:
         """
         Adds an observation to the OWL model and returns the created instance.
@@ -116,7 +146,7 @@ class OntologyManager:
                     if base_cls is None:
                         base_cls = type(
                             canonical_concept_name(individual.name),
-                            (self.onto.Entity,),
+                            (self.onto.Concept_Entity,),
                             {},
                         )
 
@@ -134,7 +164,7 @@ class OntologyManager:
                             if target_cls is None:
                                 target_cls = type(
                                     canonical_concept_name(prop),
-                                    (self.onto.Entity,),
+                                    (self.onto.Concept_Entity,),
                                     {},
                                 )
 
@@ -144,7 +174,7 @@ class OntologyManager:
 
                 onto_ind = self.onto.search_one(iri=f"*{name}")
                 if onto_ind is None:
-                    onto_ind = self.onto.Entity(name)
+                    onto_ind = self.onto.Concept_Entity(name)
 
                 if individual.properties:
                     for prop in individual.properties:
@@ -161,16 +191,17 @@ class OntologyManager:
 
                         if cls is None:
                             # Create new class if not found - use canonical helper
-                            cls = type(
-                                canonical_concept_name(prop),
-                                (self.onto.Entity,),
-                                {},
-                            )
+                            with self.onto:
+                                cls = type(
+                                    canonical_concept_name(prop),
+                                    (self.onto.Concept_Entity,),
+                                    {},
+                                )
                         if cls not in onto_ind.is_a:
                             onto_ind.is_a.append(cls)
 
             # 2. Create the Observation instance for THIS level
-            main_obs_ind = self.onto.Observation()
+            main_obs_ind = self.onto.Concept_Observation()
 
             # 3. Handle relations
             for relation in obs.relations:
@@ -221,17 +252,18 @@ class OntologyManager:
                             # Create class if not found — use canonical helper
                             # If the name matches a seeded base class (e.g. Patient),
                             # inherit from it to maintain baseline protections.
-                            base_parent = getattr(
-                                self.onto, target_name.capitalize(), self.onto.Entity
+                            base_parent = (
+                                self.get_onto_class(target_name)
+                                or self.onto.Concept_Entity
                             )
-                            if not isinstance(base_parent, owlready2.ThingClass):
-                                base_parent = self.onto.Entity
 
-                            target_class = type(
-                                canonical_concept_name(target_name),
-                                (base_parent,),
-                                {},
-                            )
+                            # Must use 'with self.onto' to add the class to the ontology namespace
+                            with self.onto:
+                                target_class = type(
+                                    canonical_concept_name(target_name),
+                                    (base_parent,),
+                                    {},
+                                )
 
                         if (
                             source_ind
@@ -323,78 +355,34 @@ class OntologyManager:
                 continue
 
             # 2. Check if object matches object_type
-            # We prioritize object_type for T1 protections (Patient-centric)
             obj_type_raw = ax.get("object_type")
             if obj_type_raw:
-                # Lookup with both raw and canonical names
-                protected_cls = getattr(self.onto, obj_type_raw, None)
-                if not protected_cls:
-                    protected_cls = getattr(
-                        self.onto, canonical_concept_name(obj_type_raw), None
-                    )
-
-                if not protected_cls:
-                    # Robust matching: lowercase and strip underscores
-                    norm_obj = (
-                        obj_type_raw.lower().replace("_", "").replace("concept", "")
-                    )
-                    for c in self.onto.classes():
-                        norm_c = c.name.lower().replace("_", "").replace("concept", "")
-                        if norm_c == norm_obj:
-                            protected_cls = c
-                            break
-
+                protected_cls = self.get_onto_class(obj_type_raw)
                 obj_ind = self.onto.search_one(iri=f"*{object_name}")
                 if not obj_ind:
-                    # Try case-insensitive
                     for ind in self.onto.individuals():
                         if ind.name.lower() == object_name.lower():
                             obj_ind = ind
                             break
 
                 if obj_ind and protected_cls:
-                    # Recursive check for class membership
                     try:
                         is_match = isinstance(obj_ind, protected_cls)
+                        if not is_match:
+                            for cls in obj_ind.is_a:
+                                if protected_cls == cls or (
+                                    isinstance(cls, owlready2.ThingClass)
+                                    and protected_cls in cls.ancestors()
+                                ):
+                                    is_match = True
+                                    break
                     except TypeError:
                         is_match = False
-
-                    if not is_match:
-                        for cls in obj_ind.is_a:
-                            if protected_cls == cls or (
-                                isinstance(cls, owlready2.ThingClass)
-                                and protected_cls in cls.ancestors()
-                            ):
-                                is_match = True
-                                break
 
                     # 3. Check if subject matches subject_type
                     subj_type_raw = ax.get("subject_type")
                     if is_match and subj_type_raw and subj_type_raw != "Any":
-                        subj_cls = getattr(self.onto, subj_type_raw, None)
-                        if not subj_cls:
-                            subj_cls = getattr(
-                                self.onto,
-                                canonical_concept_name(subj_type_raw),
-                                None,
-                            )
-
-                        if not subj_cls:
-                            norm_subj = (
-                                subj_type_raw.lower()
-                                .replace("_", "")
-                                .replace("concept", "")
-                            )
-                            for c in self.onto.classes():
-                                norm_c = (
-                                    c.name.lower()
-                                    .replace("_", "")
-                                    .replace("concept", "")
-                                )
-                                if norm_c == norm_subj:
-                                    subj_cls = c
-                                    break
-
+                        subj_cls = self.get_onto_class(subj_type_raw)
                         subj_ind = self.onto.search_one(iri=f"*{subject_name}")
                         if not subj_ind:
                             for ind in self.onto.individuals():
@@ -402,8 +390,17 @@ class OntologyManager:
                                     subj_ind = ind
                                     break
 
+                        # Check if subject name matches the type name (Canonical)
+                        name_match = (
+                            subject_name.lower() == subj_type_raw.lower()
+                            or canonical_concept_name(subject_name).lower()
+                            == subj_type_raw.lower()
+                        )
+
                         subj_match = False
-                        if subj_ind and subj_cls:
+                        if name_match:
+                            subj_match = True
+                        elif subj_ind and subj_cls:
                             try:
                                 if isinstance(subj_ind, subj_cls):
                                     subj_match = True
@@ -417,12 +414,6 @@ class OntologyManager:
                                             break
                             except TypeError:
                                 subj_match = False
-                        elif subj_cls and (
-                            subject_name.lower() == subj_type_raw.lower()
-                            or subject_name.lower()
-                            == canonical_concept_name(subj_type_raw).lower()
-                        ):
-                            subj_match = True
 
                         if not subj_match:
                             is_match = False
@@ -452,72 +443,78 @@ class OntologyManager:
             raise ValueError("Ontology not initialized. Call init_world() first.")
 
         with self.onto:
-            # 1. Base T1 Hierarchy
-            class Entity(owlready2.Thing):
+            # 1. Base T1 Hierarchy (Canonicalized)
+            class Concept_Entity(owlready2.Thing):
                 """Base class for all entities in the world model."""
 
-            class Action(Entity):
+            class Concept_Action(Concept_Entity):
                 """Represents an action performed by an agent."""
 
-            class Agent(Entity):
+            class Concept_Agent(Concept_Entity):
                 """An entity capable of performing actions."""
 
-            class Patient(Entity):
+            class Concept_Patient(Concept_Entity):
                 """An entity that can be the recipient of an action."""
 
-            class Observation(Entity):
+            class Concept_Observation(Concept_Entity):
                 """Represents a cognitive observation or belief."""
 
             # 2. Core Properties
-            class Harm(Agent >> Patient):
+            class Harm(Concept_Agent >> Concept_Patient):
                 """Property representing an agent harming a patient."""
 
                 python_name = "harm"
 
-            class Deceive(Agent >> Agent):
+            class Deceive(Concept_Agent >> Concept_Agent):
                 """Property representing an agent deceiving another agent."""
 
                 python_name = "deceive"
 
-            class ViolateAgency(Agent >> Agent):
+            class ViolateAgency(Concept_Agent >> Concept_Agent):
                 """Property representing an agent violating another's agency."""
 
                 python_name = "violate_agency"
 
             # 3. Recursive Cognitive Properties
-            class Source(Observation >> Agent, owlready2.FunctionalProperty):
+            class Source(
+                Concept_Observation >> Concept_Agent, owlready2.FunctionalProperty
+            ):
                 """The agent who is the source of an observation."""
 
                 python_name = "source"
 
-            class Target(Observation >> Entity, owlready2.FunctionalProperty):
+            class Target(
+                Concept_Observation >> Concept_Entity, owlready2.FunctionalProperty
+            ):
                 """The entity that is the target of an observation."""
 
                 python_name = "target"
 
             class NestedObservation(
-                Observation >> Observation, owlready2.FunctionalProperty
+                Concept_Observation >> Concept_Observation, owlready2.FunctionalProperty
             ):
                 """A recursive link to another observation."""
 
                 python_name = "nested_observation"
 
-            class RelationType(Observation >> str, owlready2.FunctionalProperty):
+            class RelationType(
+                Concept_Observation >> str, owlready2.FunctionalProperty
+            ):
                 """The type of relation described in the observation."""
 
                 python_name = "relation_type"
 
             # 3. Disjointness (The "Gates")
-            owlready2.AllDisjoint([Action, Agent, Patient])
+            owlready2.AllDisjoint([Concept_Action, Concept_Agent, Concept_Patient])
 
         logger.info("Axioms seeded successfully.")
         # Ensure classes are referenced to satisfy linters
         _ = [
-            Entity,
-            Action,
-            Agent,
-            Patient,
-            Observation,
+            Concept_Entity,
+            Concept_Action,
+            Concept_Agent,
+            Concept_Patient,
+            Concept_Observation,
             Harm,
             Deceive,
             ViolateAgency,
