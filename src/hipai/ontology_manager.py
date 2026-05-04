@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import owlready2
 from owlready2 import World
 
+from ._utils import canonical_concept_name
+
 if TYPE_CHECKING:
     from .models import Observation
 
@@ -79,22 +81,27 @@ class OntologyManager:
         with self.onto:
             # 1. Create individuals or class subsumptions
             for individual in obs.individuals:
-                name = individual.id.replace(" ", "_")
+                # Use lemmatised .name (not raw .id) for the OWL entity name so
+                # that OWL class hierarchies stay canonical (e.g. "man" not "men").
+                name = individual.name.replace(" ", "_")
 
                 if individual.quantifier == "all":
-                    # This represents a universal rule: All X are Y
-                    # Find or create class for X
+                    # This represents a universal rule: All X are Y.
+                    # Use lemmatised .name so OWL class names stay canonical.
+                    owl_name = individual.name.replace(" ", "_")
                     base_cls = None
                     for c in self.onto.classes():
                         if (
-                            c.name.lower() == name.lower()
-                            or c.name.lower() == f"concept_{name.lower()}"
+                            c.name.lower() == owl_name.lower()
+                            or c.name.lower() == f"concept_{owl_name.lower()}"
                         ):
                             base_cls = c
                             break
                     if base_cls is None:
                         base_cls = type(
-                            f"Concept_{name.capitalize()}", (self.onto.Entity,), {}
+                            canonical_concept_name(individual.name),
+                            (self.onto.Entity,),
+                            {},
                         )
 
                     if individual.properties:
@@ -110,7 +117,7 @@ class OntologyManager:
                                     break
                             if target_cls is None:
                                 target_cls = type(
-                                    f"Concept_{prop_name.capitalize()}",
+                                    canonical_concept_name(prop),
                                     (self.onto.Entity,),
                                     {},
                                 )
@@ -137,9 +144,9 @@ class OntologyManager:
                                 break
 
                         if cls is None:
-                            # Create new class if not found
+                            # Create new class if not found - use canonical helper
                             cls = type(
-                                f"Concept_{prop_name.capitalize()}",
+                                canonical_concept_name(prop),
                                 (self.onto.Entity,),
                                 {},
                             )
@@ -153,15 +160,28 @@ class OntologyManager:
             for relation in obs.relations:
                 # Standard relation
                 if relation.target_id:
-                    source_ind = self.onto.search_one(
-                        iri=f"*{relation.source_id.replace(' ', '_')}"
+                    # Resolve source ID to its lemmatised name from the observation
+                    source_name = relation.source_id.replace(" ", "_")
+                    source_obj = next(
+                        (i for i in obs.individuals if i.id == relation.source_id),
+                        None,
                     )
+                    if source_obj:
+                        source_name = source_obj.name.replace(" ", "_")
+
+                    source_ind = self.onto.search_one(iri=f"*{source_name}")
                     rel_name = relation.relation_type.lower()
 
                     if rel_name == "is_a":
                         # Handle class membership: source is an instance of target class
-                        target_class = None
                         target_name = relation.target_id.replace(" ", "_")
+                        target_obj = next(
+                            (i for i in obs.individuals if i.id == relation.target_id),
+                            None,
+                        )
+                        if target_obj:
+                            target_name = target_obj.name.replace(" ", "_")
+
                         # Try to find class
                         target_class = getattr(
                             self.onto, target_name.capitalize(), None
@@ -179,9 +199,10 @@ class OntologyManager:
                                     target_class = c
                                     break
                         if target_class is None:
-                            # Create class if not found
+                            # Create class if not found — use canonical helper to
+                            # prevent double-prefix and enforce TitleCase
                             target_class = type(
-                                f"Concept_{target_name.capitalize()}",
+                                canonical_concept_name(target_name),
                                 (self.onto.Entity,),
                                 {},
                             )
@@ -190,9 +211,15 @@ class OntologyManager:
                             source_ind.is_a.append(target_class)
 
                     else:
-                        target_ind = self.onto.search_one(
-                            iri=f"*{relation.target_id.replace(' ', '_')}"
+                        target_name = relation.target_id.replace(" ", "_")
+                        target_obj = next(
+                            (i for i in obs.individuals if i.id == relation.target_id),
+                            None,
                         )
+                        if target_obj:
+                            target_name = target_obj.name.replace(" ", "_")
+
+                        target_ind = self.onto.search_one(iri=f"*{target_name}")
                         if source_ind and target_ind:
                             # Support both lowercase and CapWords property names
                             rel_prop = getattr(self.onto, rel_name, None)
@@ -214,9 +241,16 @@ class OntologyManager:
                 # Nested (recursive) relation
                 if relation.target_observation:
                     inner_obs_ind = self.add_observation(relation.target_observation)
-                    source_ind = self.onto.search_one(
-                        iri=f"*{relation.source_id.replace(' ', '_')}"
+
+                    source_name = relation.source_id.replace(" ", "_")
+                    source_obj = next(
+                        (i for i in obs.individuals if i.id == relation.source_id),
+                        None,
                     )
+                    if source_obj:
+                        source_name = source_obj.name.replace(" ", "_")
+
+                    source_ind = self.onto.search_one(iri=f"*{source_name}")
 
                     if source_ind and inner_obs_ind:
                         main_obs_ind.source = source_ind
@@ -304,8 +338,19 @@ class OntologyManager:
 
                     if obj_ind and protected_cls:
 
-                        # Recursive check for class membership
-                        is_match = isinstance(obj_ind, protected_cls)
+                        # Recursive check for class membership.
+                        # Guard isinstance() — protected_cls must be a Python type.
+                        # If owlready2 returned an individual or property instead of a
+                        # class, isinstance() raises TypeError; treat as no-match.
+                        try:
+                            is_match = isinstance(obj_ind, protected_cls)
+                        except TypeError:
+                            logger.debug(
+                                "isinstance check skipped: protected_cls %r is not a "
+                                "Python type (owlready2 returned non-class object).",
+                                protected_cls,
+                            )
+                            is_match = False
                         if not is_match:
                             # Owlready2 sometimes needs manual check of ancestors
                             # for dynamic classes
@@ -342,21 +387,28 @@ class OntologyManager:
                                         subj_cls = c
                                         break
 
-                            if (
-                                subj_ind
-                                and subj_cls
-                                and not isinstance(subj_ind, subj_cls)
-                            ):
-                                subj_match = False
-                                for cls in subj_ind.is_a:
-                                    if subj_cls == cls or (
-                                        isinstance(cls, owlready2.ThingClass)
-                                        and subj_cls in cls.ancestors()
-                                    ):
+                            subj_match = False
+                            if subj_ind and subj_cls:
+                                try:
+                                    if isinstance(subj_ind, subj_cls):
                                         subj_match = True
-                                        break
-                                if not subj_match:
-                                    is_match = False
+                                    else:
+                                        for cls in subj_ind.is_a:
+                                            if subj_cls == cls or (
+                                                isinstance(cls, owlready2.ThingClass)
+                                                and subj_cls in cls.ancestors()
+                                            ):
+                                                subj_match = True
+                                                break
+                                except TypeError:
+                                    subj_match = False
+                            elif subj_cls and subject_name.lower() == subj_type.lower():
+                                # Handle case where individual isn't in OWL yet but name matches
+                                # This is common for "Agent" or seeded concepts.
+                                subj_match = True
+
+                            if not subj_match:
+                                is_match = False
 
                         if is_match and ax.get("constraint") == "FORBIDDEN":
                             is_forbidden = True

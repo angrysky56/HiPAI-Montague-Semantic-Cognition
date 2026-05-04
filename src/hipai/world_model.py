@@ -13,6 +13,7 @@ from sentence_transformers import SentenceTransformer
 # as we use CPU for the small embedding model
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
+from ._utils import canonical_concept_name
 from .models import DeontologicalAxiom, Observation
 from .ontology_manager import OntologyManager
 
@@ -159,7 +160,8 @@ class WorldModel:
         for individual in obs.individuals:
             # Handle quantifiers: Create Concept node for universals
             if individual.quantifier in ("all", "no"):
-                concept_name = f"Concept_{individual.name.capitalize()}"
+                # Use lemmatised .name (e.g. "man") not raw .id (e.g. "men")
+                concept_name = canonical_concept_name(individual.name)
                 concept_query = """
                 MATCH (o:EpistemicNode:Observation {event_id: $event_id})
                 MERGE (c:StructureNote:Concept {name: $concept_name})
@@ -185,6 +187,22 @@ class WorldModel:
                             rel.source_id == individual.id
                             and rel.relation_type == "IS_A"
                         ):
+                            # Resolve the IS_A target to its lemmatised name.
+                            # rel.target_id is the un-lemmatised surface ID
+                            # (e.g. "men"); the lemmatised name lives on the
+                            # corresponding Individual if it was parsed in this
+                            # observation, otherwise fall back to the raw ID.
+                            target_ind = next(
+                                (
+                                    ind
+                                    for ind in obs.individuals
+                                    if ind.id == rel.target_id
+                                ),
+                                None,
+                            )
+                            target_lemma = (
+                                target_ind.name if target_ind else rel.target_id
+                            )
                             q = """
                             MATCH (c1:Concept {name: $c1})
                             MERGE (c2:Concept {name: $c2})
@@ -194,7 +212,7 @@ class WorldModel:
                                 q,
                                 params={
                                     "c1": concept_name,
-                                    "c2": f"Concept_{rel.target_id.capitalize()}",
+                                    "c2": canonical_concept_name(target_lemma),
                                 },
                             )
 
@@ -265,8 +283,9 @@ class WorldModel:
                     },
                 )
 
-                # Link to base concept
-                concept_name = f"Concept_{individual.name.capitalize()}"
+                # Link to base concept — use canonical helper to guard against
+                # double-prefix and ensure consistent capitalisation
+                concept_name = canonical_concept_name(individual.name)
                 link_query = """
                 MERGE (c:StructureNote:Concept {name: $concept_name})
                 WITH c
@@ -391,16 +410,32 @@ class WorldModel:
 
                 if is_factive:
                     if rel_type == "IS_A":
-                        # Find or create target Concept
-                        target_res = self.graph.query(
-                            "MATCH (n {id: $id}) RETURN n.name", params={"id": target}
+                        # Resolve the IS_A target to its canonical concept name.
+                        # Prefer the lemmatised .name from obs.individuals; fall
+                        # back to what the graph already stores, and finally to
+                        # the raw target ID — all routed through the canonical
+                        # helper so node names are consistent.
+                        target_ind_in_obs = next(
+                            (
+                                ind
+                                for ind in obs.individuals
+                                if ind.id == target
+                            ),
+                            None,
                         )
-                        target_name = (
-                            target_res.result_set[0][0]
-                            if target_res.result_set
-                            else target
-                        )
-                        concept_name = f"Concept_{target_name.capitalize()}"
+                        if target_ind_in_obs:
+                            target_name = target_ind_in_obs.name
+                        else:
+                            target_res = self.graph.query(
+                                "MATCH (n {id: $id}) RETURN n.name",
+                                params={"id": target},
+                            )
+                            target_name = (
+                                target_res.result_set[0][0]
+                                if target_res.result_set
+                                else target
+                            )
+                        concept_name = canonical_concept_name(target_name)
 
                         query = """
                         MATCH (a {id: $source})
