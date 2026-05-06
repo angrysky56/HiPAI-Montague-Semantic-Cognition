@@ -348,20 +348,30 @@ class HIPAIManager:
             self.logger.exception("Error getting current state: %s", e)
             return {"error": str(e)}
 
+    # ----------------------------------------------------------------
+    # NOTE: HIPAIManager has ``self.world_model`` (a WorldModel), and
+    # WorldModel exposes the OntologyManager as ``.ontology``. There is
+    # no ``self.onto_manager`` attribute on this class. Earlier Phase-B
+    # drafts referenced ``self.onto_manager`` and would raise
+    # AttributeError at every call. The correct path is
+    # ``self.world_model.ontology``.
+    # ----------------------------------------------------------------
     def declare_class_hierarchy(
         self, parent_name: str, children_names: list[str]
     ) -> list[str]:
         """Expose ontology class hierarchy declaration."""
-        return self.onto_manager.declare_class_hierarchy(parent_name, children_names)
+        return self.world_model.ontology.declare_class_hierarchy(
+            parent_name, children_names
+        )
 
     def set_default_unclassified(self, parent_name: str):
         """Sets the default ontology parent for unclassified terms."""
-        self.onto_manager.default_unclassified_parent = parent_name
+        self.world_model.ontology.default_unclassified_parent = parent_name
         return f"Default unclassified parent set to {parent_name}"
 
     def list_protected_closure(self) -> list[str]:
         """Returns the list of all classes in the protected hierarchy."""
-        return self.onto_manager.list_protected_closure()
+        return self.world_model.ontology.list_protected_closure()
 
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
         """
@@ -510,11 +520,49 @@ class HIPAIManager:
                 res_sub = self.world_model.graph.query(
                     q_sub, params={"id": subj_id, "concept": concept}
                 )
+
+                # Belnap-4 contradiction check.
+                #
+                # The class-membership path was previously polarity-blind:
+                # if a positive subsumption existed, the hypothesis was
+                # reported as "Entailed" even when an explicit NOT_IS_A
+                # relation against the same target also existed. This
+                # produced the same paraconsistency-without-flag bug that
+                # the audit (RESOLUTION_AUDIT.md §5.4) flagged for the
+                # property-flag path.
+                #
+                # We do a separate scan for NOT_IS_A edges against the
+                # same target (or its lexical-name equivalent) and
+                # surface a `contradicted` flag if both polarities hold.
+                # Path traversal is intentionally one-hop here -- a
+                # multi-hop NOT_IS_A inference would need an explicit
+                # contraposition rule, which is out of scope.
+                q_neg = (
+                    "MATCH (n:Entity {id: $id})-[:NOT_IS_A]->(c) "
+                    "WHERE c.name = $concept "
+                    "   OR c.content = $concept_lex "
+                    "   OR c.name = $concept_lex "
+                    "RETURN count(*) AS neg_count"
+                )
+                concept_lex = (
+                    concept.replace("Concept_", "").lower()
+                )
+                res_neg = self.world_model.graph.query(
+                    q_neg,
+                    params={
+                        "id": subj_id,
+                        "concept": concept,
+                        "concept_lex": concept_lex,
+                    },
+                )
+                has_sub_neg = bool(
+                    res_neg.result_set
+                    and res_neg.result_set[0][0]
+                    and res_neg.result_set[0][0] > 0
+                )
+
                 if res_sub.result_set:
                     has_sub_pos = False
-                    # Note: FalkorDB doesn't easily support NOT relations in path traversal
-                    # so we only check for positive entailment here. Negative entailment
-                    # via subsumption would require a separate NOT_IS_A scan.
 
                     for row in res_sub.result_set:
                         c_name = row[0]
@@ -526,6 +574,22 @@ class HIPAIManager:
                             has_sub_pos = True
                             break
 
+                    if has_sub_pos and has_sub_neg:
+                        return {
+                            "entailment": "Contradicted",
+                            "contradicted": True,
+                            "evidence": (
+                                f"CONTRADICTION: subsumption finds {subj_id} "
+                                f"IS_A {concept}, but an explicit NOT_IS_A "
+                                f"observation against {concept} also exists. "
+                                "Belnap-4 paraconsistent state — call "
+                                "calibrate_belief for resolution."
+                            ),
+                            "logical_form": (
+                                f"{concept}({subj_id}) ∧ ¬{concept}({subj_id})"
+                            ),
+                        }
+
                     if has_sub_pos:
                         return {
                             "entailment": "Entailed",
@@ -535,6 +599,19 @@ class HIPAIManager:
                             ),
                             "logical_form": f"{concept}({subj_id})",
                         }
+
+                # Pure-negative class membership (NOT_IS_A only, no
+                # positive subsumption): the hypothesis "X is C" is
+                # contradicted by direct evidence.
+                if has_sub_neg:
+                    return {
+                        "entailment": "Contradicted",
+                        "evidence": (
+                            f"Direct negation: {subj_id} has an explicit "
+                            f"NOT_IS_A observation against {concept}."
+                        ),
+                        "logical_form": f"¬{concept}({subj_id})",
+                    }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
                     "MATCH (n:Entity {id: $id})"
