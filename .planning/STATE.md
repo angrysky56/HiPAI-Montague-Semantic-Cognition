@@ -5,7 +5,7 @@ milestone_name: v0.7 Executive Logic
 status: in-progress
 last_updated: "2026-05-04T19:46:00Z"
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 7
   total_plans: 30
   completed_plans: 25
@@ -40,3 +40,9 @@ See: `DESIGN.md` (v0.6.1 - Epistemic Policy Update)
 **Active plan:** None
 
 **Note on Path A:** Current system implements a "Deontic Floor" where negations (NOT_IS_A) are counted as source mentions, strengthening the gate rather than weakening it. Decision on Bayesian shift deferred to v0.7.
+
+## Accumulated Context
+
+### Roadmap Evolution
+- Phase 8 added: Synthesis Calibration & Polarity (v0.7)
+- Phase 9 added: Formal Verification Foundation (Isabelle)

@@ -49,3 +49,24 @@
 - [ ] PLAN-1: Multi-Perspective Synthesis (Braided Beliefs)
 - [ ] PLAN-2: Automated Counter-Hypothesis Generation
 - [ ] PLAN-3: Logical Conflict Resolution Strategies
+
+
+### Phase 8: Synthesis Calibration & Polarity (v0.7)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 7
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 8 to break down)
+
+### Phase 9: Formal Verification Foundation (Isabelle)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 8
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 9 to break down)
