@@ -12,3 +12,8 @@ wheels/
 # Database files
 *.db
 hipai_world.db
+*.db-shm
+*.db-wal
+# Temporary files and scratch
+*.txt
+scratch/

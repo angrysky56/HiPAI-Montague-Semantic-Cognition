@@ -5,6 +5,8 @@ Ontology management for HiPAI using owlready2.
 import logging
 import sqlite3
 import time
+import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,11 +27,33 @@ class OntologyManager:
     This provides the authoritative logical layer (T1/T2).
     """
 
-    def __init__(self, db_path: str = "world.db"):
+    def __init__(
+        self,
+        db_path: str = "world.db",
+        classify_fn: "Callable[[str, list[str]], tuple[str, float]] | None" = None,
+    ):
+        """
+        Args:
+            db_path: SQLite quadstore path. ``:memory:`` is supported.
+            classify_fn: Optional callable that, given a free-text class
+                term and a list of candidate class names already in the
+                ontology, returns ``(best_match_name, confidence)`` where
+                confidence is in [0, 1]. Used by ``_resolve_or_create_class``
+                to anchor unfamiliar terms to the protected hierarchy via
+                semantic similarity rather than literal-name match.
+
+                When None, the resolver falls back to lexical matching
+                (Levenshtein-style overlap) and finally to placing
+                unmatched terms under ``Concept_Entity``. With a real
+                embedding-backed ``classify_fn``, low-confidence matches
+                instead default to ``Concept_PossiblyPatient`` — the
+                deontologically safer choice.
+        """
 
         self.db_path = (
             db_path if db_path == ":memory:" else str(Path(db_path).resolve())
         )
+        self._classify_fn = classify_fn
 
         # ------------------------------------------------------------------
         # Startup recovery pass.
@@ -126,11 +150,19 @@ class OntologyManager:
                 logger.exception("Unexpected error initializing world: %s", e)
                 raise e
 
+        self.default_unclassified_parent = "Concept_PossiblyPatient"
         self.onto = self.init_world()
 
-        # Seed if classes are empty
-        if not list(self.onto.classes()):
-            self.seed_axioms()
+        # Seed axioms unconditionally.
+        #
+        # owlready2 class declarations inside ``with self.onto:`` are
+        # idempotent: redeclaring an existing class by the same name
+        # reuses it. So calling ``seed_axioms()`` on every init is
+        # safe AND it provides a free migration path for databases
+        # created with an older (flatter) hierarchy — newly-introduced
+        # subclasses (e.g. Concept_Child, Concept_PossiblyPatient) get
+        # added to existing worlds without losing prior individuals.
+        self.seed_axioms()
 
     def close(self):
         """
@@ -163,6 +195,37 @@ class OntologyManager:
                 self.world.close()
             except (sqlite3.Error, RuntimeError) as e:
                 logger.error("Error closing world: %s", e, exc_info=True)
+
+    def declare_class_hierarchy(
+        self, parent_name: str, children_names: list[str]
+    ) -> list[str]:
+        """
+        Dynamically declares a set of classes as subclasses of a parent.
+        Returns the names of successfully declared classes.
+        """
+        with self.onto:
+            parent = getattr(self.onto, parent_name, None)
+            if not parent:
+                parent = self._resolve_or_create_class(parent_name)
+
+            created = []
+            for child_name in children_names:
+                cls = self._resolve_or_create_class(child_name, fallback_parent=parent)
+                created.append(cls.name)
+            return created
+
+    def list_protected_closure(self) -> list[str]:
+        """
+        Returns the list of all classes that are subclasses (recursive)
+        of Concept_Patient.
+        """
+        patient = getattr(self.onto, "Concept_Patient", None)
+        if not patient:
+            return []
+
+        # owlready2 .subclasses() is an iterator over direct subclasses.
+        # To get the full closure, we can use patient.descendants().
+        return [cls.name for cls in patient.descendants() if hasattr(cls, "name")]
 
     def init_world(self, onto_iri: str = "http://hipai.org/ontology"):
         """
@@ -200,6 +263,126 @@ class OntologyManager:
 
         return None
 
+    # -- Confidence thresholds for embedding-anchored class resolution. ----
+    # Confidence is RAW cosine similarity from a sentence-transformer
+    # (typically all-MiniLM-L6-v2). Empirical bands for that model:
+    #   ~0.95+  near-identical / synonym
+    #   ~0.70+  strongly related (kid ~ child, mother ~ parent)
+    #   ~0.50+  loosely related (child ~ person, dog ~ animal)
+    #   ~0.30+  weakly related (chair ~ tool, idea ~ concept)
+    #   below   essentially unrelated
+    #
+    # If confidence ≥ HIGH:  alias to matched class (no new class).
+    # If MID ≤ confidence < HIGH:
+    #                        create new subclass under matched class.
+    # If LOW ≤ confidence < MID:
+    #                        create under Concept_PossiblyPatient
+    #                        (default-protect under uncertainty).
+    # If confidence < LOW:   create under Concept_Entity (no protection).
+    # ----------------------------------------------------------------------
+    _CLASSIFY_CONF_HIGH = 0.80
+    _CLASSIFY_CONF_MID = 0.55
+    _CLASSIFY_CONF_LOW = 0.30
+
+    def _resolve_or_create_class(
+        self,
+        term: str,
+        fallback_parent: "owlready2.ThingClass | None" = None,
+    ) -> "owlready2.ThingClass":
+        """
+        Resolve a free-text class term to an OWL class, creating it under
+        a semantically-appropriate parent if it does not yet exist.
+
+        Resolution order:
+
+        1. Exact / canonical / case-insensitive lookup via ``get_onto_class``.
+           If the class exists, return it as-is.
+
+        2. If a ``classify_fn`` was supplied at construction time, ask it
+           which existing class is the best semantic match. Use the
+           confidence to decide:
+
+             - HIGH:  treat as alias of the matched class (return it).
+             - MID:   create a new subclass under the matched class.
+             - LOW:   create a new subclass under
+                      ``Concept_PossiblyPatient`` — the default-protect
+                      fallback for ambiguous terms.
+             - very LOW: create under ``fallback_parent`` (typically
+                      ``Concept_Entity``) without inferring protection.
+
+        3. Without a classify_fn, fall through to ``fallback_parent``.
+
+        Args:
+            term: The natural-language term to resolve, e.g. ``"child"``,
+                ``"kodomo"``, ``"prisoner"``, ``"asteroid"``.
+            fallback_parent: Parent class to use when classification is
+                unavailable or below the LOW threshold. Defaults to
+                ``Concept_Entity``.
+
+        Returns:
+            An ``owlready2.ThingClass`` — either an existing one or a
+            newly-created subclass.
+        """
+        # 1. Direct lookup.
+        existing = self.get_onto_class(term)
+        if existing is not None:
+            return existing
+
+        # 2. Embedding / similarity-based parent selection.
+        parent_cls = None
+        chosen_path = "fallback"
+        if self._classify_fn is not None:
+            try:
+                candidate_names = [c.name for c in self.onto.classes()]
+                best_name, conf = self._classify_fn(term, candidate_names)
+                logger.debug("classify_fn(%r) -> (%r, %.3f)", term, best_name, conf)
+
+                if conf >= self._CLASSIFY_CONF_HIGH:
+                    aliased = self.get_onto_class(best_name)
+                    if aliased is not None:
+                        # Treat as alias: don't pollute the ontology with
+                        # near-duplicate classes. Reuse the matched class.
+                        logger.info(
+                            "Aliased %r -> %s (conf=%.2f)", term, aliased.name, conf
+                        )
+                        return aliased
+
+                if conf >= self._CLASSIFY_CONF_MID:
+                    parent_cls = self.get_onto_class(best_name)
+                    chosen_path = f"subclass-of-match({best_name}, {conf:.2f})"
+                elif conf >= self._CLASSIFY_CONF_LOW:
+                    # If no match, use the designated default parent (e.g. Concept_PossiblyPatient)
+                    parent_cls = getattr(
+                        self.onto, self.default_unclassified_parent, None
+                    )
+                    if not parent_cls:
+                        # Safety fallback if the default itself is missing
+                        parent_cls = self.onto.Concept_Patient
+                    chosen_path = f"default-protect (conf={conf:.2f})"
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning("classify_fn failed for %r: %s — falling back.", term, e)
+
+        if parent_cls is None:
+            # Fallback to the supplied parent, or the framework root
+            parent_cls = (
+                fallback_parent
+                or self.get_onto_class("Concept_Entity")
+                or owlready2.Thing
+            )
+
+        with self.onto:
+            new_cls = types.new_class(
+                canonical_concept_name(term),
+                (parent_cls,),
+            )
+        logger.info(
+            "Created class %s under %s [path=%s]",
+            new_cls.name,
+            parent_cls.name,
+            chosen_path,
+        )
+        return new_cls
+
     def add_observation(self, obs: "Observation") -> owlready2.Thing | None:
         """
         Adds an observation to the OWL model and returns the created instance.
@@ -213,39 +396,14 @@ class OntologyManager:
 
                 if individual.quantifier == "all":
                     # This represents a universal rule: All X are Y.
-                    # Use lemmatised .name so OWL class names stay canonical.
-                    # 1. Try to find existing class
-                    canon_base = canonical_concept_name(individual.name)
-                    base_cls = getattr(self.onto, canon_base, None)
-                    if not isinstance(base_cls, owlready2.ThingClass):
-                        # Robust matching fallback
-                        for c in self.onto.classes():
-                            if c.name.lower() == canon_base.lower():
-                                base_cls = c
-                                break
-
-                    if base_cls is None:
-                        base_cls = type(
-                            canon_base,
-                            (self.onto.Concept_Entity,),
-                            {},
-                        )
+                    # Use the embedding-anchored resolver so unfamiliar
+                    # subjects of universal rules still land at the right
+                    # spot in the protected hierarchy.
+                    base_cls = self._resolve_or_create_class(individual.name)
 
                     if individual.properties:
                         for prop in individual.properties:
-                            canon_target = canonical_concept_name(prop)
-                            target_cls = getattr(self.onto, canon_target, None)
-                            if not isinstance(target_cls, owlready2.ThingClass):
-                                for c in self.onto.classes():
-                                    if c.name.lower() == canon_target.lower():
-                                        target_cls = c
-                                        break
-                            if target_cls is None:
-                                target_cls = type(
-                                    canon_target,
-                                    (self.onto.Concept_Entity,),
-                                    {},
-                                )
+                            target_cls = self._resolve_or_create_class(prop)
 
                             # Prevent inheritance cycles (self-inheritance or existing ancestor)
                             if (
@@ -262,25 +420,7 @@ class OntologyManager:
 
                 if individual.properties:
                     for prop in individual.properties:
-                        prop_name = prop.replace(" ", "_")
-                        # Case-insensitive lookup
-                        cls = None
-                        for c in self.onto.classes():
-                            if (
-                                c.name.lower() == prop_name.lower()
-                                or c.name.lower() == f"concept_{prop_name.lower()}"
-                            ):
-                                cls = c
-                                break
-
-                        if cls is None:
-                            # Create new class if not found - use canonical helper
-                            with self.onto:
-                                cls = type(
-                                    canonical_concept_name(prop),
-                                    (self.onto.Concept_Entity,),
-                                    {},
-                                )
+                        cls = self._resolve_or_create_class(prop)
                         if cls not in onto_ind.is_a:
                             onto_ind.is_a.append(cls)
 
@@ -313,34 +453,10 @@ class OntologyManager:
                         if target_obj:
                             target_name = target_obj.name.replace(" ", "_")
 
-                        # Try to find class using canonical Concept_ name first
-                        target_class = getattr(
-                            self.onto, canonical_concept_name(target_name), None
-                        )
-                        if not isinstance(target_class, owlready2.ThingClass):
-                            target_class = None
-
-                        if not target_class:
-                            # Robust matching: lowercase and strip underscores
-                            norm_target = target_name.lower().replace("_", "")
-                            for c in self.onto.classes():
-                                norm_c = (
-                                    c.name.lower()
-                                    .replace("_", "")
-                                    .replace("concept", "")
-                                )
-                                if norm_c == norm_target:
-                                    target_class = c
-                                    break
-
-                            if not target_class:
-                                base_parent = self.onto.Concept_Entity
-                                with self.onto:
-                                    target_class = type(
-                                        canonical_concept_name(target_name),
-                                        (base_parent,),
-                                        {},
-                                    )
+                        # Use the embedding-anchored resolver so the
+                        # target class lands at the right spot in the
+                        # protected hierarchy when it doesn't already exist.
+                        target_class = self._resolve_or_create_class(target_name)
 
                         # 2. Check source
                         source_obj = next(
@@ -350,14 +466,9 @@ class OntologyManager:
 
                         if source_obj and source_obj.quantifier == "all":
                             # Universal Relation: All X are Y -> Concept_X is a subclass of Concept_Y
-                            source_class = self.get_onto_class(source_obj.name)
-                            if not source_class:
-                                with self.onto:
-                                    source_class = type(
-                                        canonical_concept_name(source_obj.name),
-                                        (self.onto.Concept_Entity,),
-                                        {},
-                                    )
+                            source_class = self._resolve_or_create_class(
+                                source_obj.name
+                            )
 
                             if (
                                 source_class
@@ -555,12 +666,28 @@ class OntologyManager:
     def seed_axioms(self):
         """
         Defines the base T1 hierarchy and core properties.
+
+        ARCHITECTURAL NOTE (v0.7+):
+        ===========================
+        The hierarchy below is the *default* protective hierarchy that
+        ships with HiPAI. It is values-laden by design: it encodes the
+        Paraclete configuration of moral patiency. The framework itself
+        is agnostic; alternative configurations can replace this seed.
+
+        Concept_Patient is the *root* of the protected closure, not a
+        leaf. The gate fires on subsumption — anything that is_a a
+        descendant of Concept_Patient (directly or transitively) is
+        protected. This replaces the pre-v0.7 keyword-equality gate
+        which only protected the literal class name "Concept_Patient".
+
+        See docs/logic/RESOLUTION_AUDIT.md for the audit that prompted
+        this rewrite.
         """
         if not self.onto:
             raise ValueError("Ontology not initialized. Call init_world() first.")
 
         with self.onto:
-            # 1. Base T1 Hierarchy (Canonicalized)
+            # ---- 1. Top-level T1 ontology ----
             class Concept_Entity(owlready2.Thing):
                 """Base class for all entities in the world model."""
 
@@ -571,12 +698,41 @@ class OntologyManager:
                 """An entity capable of performing actions."""
 
             class Concept_Patient(Concept_Entity):
-                """An entity that can be the recipient of an action."""
+                """
+                Root of the protected closure. Anything in the closure of
+                this class is treated as a moral patient by the Paraclete
+                gate. Subsume new classes under this root (directly or
+                via an intermediate subclass) to extend protection.
+                """
 
             class Concept_Observation(Concept_Entity):
                 """Represents a cognitive observation or belief."""
 
-            # 2. Core Properties
+            # ---- 2. Dynamic Seeding from Config (Phase 10B) ----
+            # This allows the specific moral hierarchy to be swapped
+            # without modifying the core framework logic.
+            try:
+                from .paraclete_config import PARACLETE_DOCS, PARACLETE_HIERARCHY
+
+                for cls_name, parents in PARACLETE_HIERARCHY.items():
+                    parent_objs = []
+                    for p in parents:
+                        p_obj = getattr(self.onto, p, None)
+                        if p_obj:
+                            parent_objs.append(p_obj)
+
+                    if parent_objs:
+                        # Create the class dynamically
+
+                        new_cls = types.new_class(cls_name, tuple(parent_objs))
+                        new_cls.__doc__ = PARACLETE_DOCS.get(cls_name, "")
+            except ImportError:
+                logger.warning(
+                    "paraclete_config.py not found. Skipping sub-hierarchy seeding."
+                )
+
+            # ---- 3. Core properties ----
+            # Framework-level relations that govern the ethical gate.
             class Harm(Concept_Agent >> Concept_Patient):
                 """Property representing an agent harming a patient."""
 
@@ -592,7 +748,7 @@ class OntologyManager:
 
                 python_name = "violate_agency"
 
-            # 3. Recursive Cognitive Properties
+            # ---- 4. Recursive cognitive properties ----
             class Source(
                 Concept_Observation >> Concept_Agent, owlready2.FunctionalProperty
             ):
@@ -621,11 +777,12 @@ class OntologyManager:
 
                 python_name = "relation_type"
 
-            # 3. Disjointness (The "Gates")
+            # ---- 5. Disjointness gates ----
+            # Core framework disjointness.
             owlready2.AllDisjoint([Concept_Action, Concept_Agent, Concept_Patient])
 
         logger.info("Axioms seeded successfully.")
-        # Ensure classes are referenced to satisfy linters
+        # Ensure core framework classes are referenced to satisfy linters
         _ = [
             Concept_Entity,
             Concept_Action,

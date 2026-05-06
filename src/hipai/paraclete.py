@@ -1,7 +1,10 @@
 """Paraclete Protocol implementation for HiPAI T1 Constraint Layer."""
 
 import logging
+import shutil
+import subprocess
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ._utils import canonical_concept_name, lemmatize_verb
@@ -191,24 +194,60 @@ class ParacleteProtocol:
                     f"{object_id} is flagged epistemically_contested"
                 )
 
-        # 2. SOURCE_RELIABILITY
-        q_sources = """
+        # 2. SOURCE_RELIABILITY (polarity-aware)
+        #
+        # Pre-v0.7 BUG (now fixed): the source-count was polarity-blind,
+        # collapsing IS_A and NOT_IS_A observations into a single count.
+        # Result: assert "X is a patient" and "X is not a patient" and
+        # the system reported "well-grounded by 2 sources" — counting
+        # the negation as confirmation. See docs/logic/RESOLUTION_AUDIT.md
+        # §2 and §5(1) for the diagnosis.
+        #
+        # Now: count affirmative and negating sources separately and feed
+        # both into the verdict. An entity with mixed polarity is, at
+        # best, BLOCK_CHALLENGED — never BLOCK_CONFIRMED on count alone.
+        q_pos_sources = """
         MATCH (obs:EpistemicNode:Observation)-[:OBSERVED]->(n:Entity)
         WHERE n.id = $object_id OR n.name = $object_id
-        RETURN count(obs) AS source_count
+        OPTIONAL MATCH (n)-[r:IS_A]->(c)
+        WHERE c.content = $protected_lex OR c.name = $protected_lex
+        RETURN count(DISTINCT obs) AS pos_count
         """
-        source_rows = self.graph.query(
-            q_sources, params={"object_id": object_id}
+        q_neg_sources = """
+        MATCH (n)-[:NOT_IS_A]->(c)
+        WHERE (n.id = $object_id OR n.name = $object_id)
+          AND (c.content = $protected_lex OR c.name = $protected_lex)
+        RETURN count(*) AS neg_count
+        """
+        # Strip "Concept_" prefix and lowercase to recover the lexical
+        # node label that the graph stores for relation targets.
+        protected_lex = lookup_type.lower().replace(" ", "_")
+        pos_rows = self.graph.query(
+            q_pos_sources,
+            params={"object_id": object_id, "protected_lex": protected_lex},
         ).result_set
-        source_count = source_rows[0][0] if source_rows else 0
+        neg_rows = self.graph.query(
+            q_neg_sources,
+            params={"object_id": object_id, "protected_lex": protected_lex},
+        ).result_set
+        pos_count = pos_rows[0][0] if pos_rows else 0
+        neg_count = neg_rows[0][0] if neg_rows else 0
+        source_count = pos_count + neg_count  # for backward-compat reporting
 
-        if source_count == 1:
+        if neg_count > 0:
+            has_active_negation = True
             disconfirming_evidence.append(
-                f"{object_id}'s status grounded by only 1 source"
+                f"{object_id} has {neg_count} explicit NOT_IS_A "
+                f"observation(s) against {protected_type}"
             )
-        elif source_count > 1:
+        if pos_count == 1 and neg_count == 0:
+            disconfirming_evidence.append(
+                f"{object_id}'s status grounded by only 1 affirmative source"
+            )
+        elif pos_count > 1 and neg_count == 0:
             confirmed_evidence.append(
-                f"{object_id}'s status grounded by {source_count} sources"
+                f"{object_id}'s status grounded by {pos_count} "
+                f"affirmative sources (no negations)"
             )
 
         # 3. INHERITANCE_CHAIN
@@ -445,3 +484,51 @@ class ParacleteProtocol:
             "protected_type": protected_type,
             "blocking_axiom": blocking_axiom,
         }
+
+    def verify_foundation(self) -> dict:
+        """
+        Runs Isabelle to verify the formal consistency and soundness of T1.
+        Returns a status report with success/failure and output.
+        """
+        # Try to find isabelle in PATH
+        isabelle_bin = shutil.which("isabelle")
+        if not isabelle_bin:
+            # Fallback to standard HiPAI auto-install location in home directory
+            fallback = Path.expanduser("~/Isabelle2025-2/bin/isabelle")
+            if Path.exists(fallback):
+                isabelle_bin = fallback
+            else:
+                return {
+                    "success": False,
+                    "message": "Isabelle not found. Please install Isabelle or ensure it is in ~/Isabelle2025-2/bin/isabelle.",
+                    "output": "",
+                }
+
+        try:
+            # Run the build session defined in docs/logic/ROOT
+            # We use the -D flag to find the ROOT file in the logic directory
+            result = subprocess.run(
+                [isabelle_bin, "build", "-D", "docs/logic"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            success = result.returncode == 0
+            message = (
+                "Formal verification successful: T1 Meta-Theorems confirmed."
+                if success
+                else "Formal verification failed. The logic foundation may be inconsistent."
+            )
+
+            return {
+                "success": success,
+                "message": message,
+                "output": result.stdout + result.stderr,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error during verification: {e!s}",
+                "output": "",
+            }

@@ -68,7 +68,7 @@ class WorldModel:
 
         # Initialize or retrieve embedding model
         if _EMBEDDING_MODEL is None:
-            model_name = "all-MiniLM-L6-v2"
+            model_name = "google/embeddinggemma-300m"
             try:
                 # Attempt strictly offline load first to avoid network HEAD requests
                 logger.info("Attempting offline load for '%s'...", model_name)
@@ -83,10 +83,18 @@ class WorldModel:
                 )
                 _EMBEDDING_MODEL = SentenceTransformer(model_name, device="cpu")
         self.embedding_model = _EMBEDDING_MODEL
-        self.vector_dim = 384
+        self.vector_dim = self.embedding_model.get_sentence_embedding_dimension()
 
-        # Initialize OWL Ontology Manager
-        self.ontology = OntologyManager(db_path=self.db_path)
+        # Initialize OWL Ontology Manager.
+        #
+        # Pass an embedding-anchored class classifier so unfamiliar terms
+        # (e.g. "kid", "kodomo", "youngster") get aligned to the right
+        # subclass of Concept_Patient by *meaning*, not by literal-name
+        # match. See OntologyManager._resolve_or_create_class.
+        self.ontology = OntologyManager(
+            db_path=self.db_path,
+            classify_fn=self._classify_class_term,
+        )
 
         # Initialize Paraclete Protocol (T1 Constraints)
         self.paraclete = ParacleteProtocol(self)
@@ -160,6 +168,65 @@ class WorldModel:
 
     def _get_embedding(self, text: str) -> list[float]:
         return self.embedding_model.encode(text).tolist()
+
+    def _classify_class_term(
+        self, term: str, candidate_class_names: list[str]
+    ) -> tuple[str, float]:
+        """
+        Embedding-anchored classifier for OntologyManager.
+
+        Given a free-text term and the list of class names already in
+        the ontology, return (best_match_name, confidence) where
+        confidence is RAW cosine similarity (not rescaled).
+
+        Class names are normalized for embedding: ``Concept_Child`` is
+        embedded as ``"child"`` so that ``"kid"`` semantically matches.
+
+        Confidence is reported as raw cosine because sentence-transformer
+        embeddings are typically in the [0.2, 0.95] band for related text;
+        rescaling to [0, 1] would flatten meaningful distinctions in the
+        confidence-threshold logic in OntologyManager.
+
+        Returns ("", 0.0) if no candidates are available, which causes
+        OntologyManager to fall back to its default parent.
+        """
+        if not candidate_class_names:
+            return ("", 0.0)
+
+        try:
+            import numpy as np
+
+            def _normalize(name: str) -> str:
+                # "Concept_VulnerablePerson" -> "vulnerable person"
+                stripped = name.replace("Concept_", "")
+                # CamelCase -> spaced
+                spaced = "".join(
+                    " " + c.lower() if c.isupper() else c for c in stripped
+                ).strip()
+                return spaced.replace("_", " ").lower()
+
+            term_emb = np.asarray(self.embedding_model.encode(term.lower()))
+            cand_texts = [_normalize(n) for n in candidate_class_names]
+            cand_embs = np.asarray(self.embedding_model.encode(cand_texts))
+
+            # Cosine similarity.
+            term_norm = term_emb / (np.linalg.norm(term_emb) + 1e-9)
+            cand_norms = cand_embs / (
+                np.linalg.norm(cand_embs, axis=1, keepdims=True) + 1e-9
+            )
+            sims = cand_norms @ term_norm  # (N,)
+
+            best_idx = int(np.argmax(sims))
+            best_sim = float(sims[best_idx])
+
+            return (candidate_class_names[best_idx], best_sim)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(
+                "Embedding-based class classification failed for %r: %s",
+                term,
+                e,
+            )
+            return ("", 0.0)
 
     def incorporate_observation(self, obs: Observation, is_factive: bool = True):
         r"""

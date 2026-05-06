@@ -348,6 +348,21 @@ class HIPAIManager:
             self.logger.exception("Error getting current state: %s", e)
             return {"error": str(e)}
 
+    def declare_class_hierarchy(
+        self, parent_name: str, children_names: list[str]
+    ) -> list[str]:
+        """Expose ontology class hierarchy declaration."""
+        return self.onto_manager.declare_class_hierarchy(parent_name, children_names)
+
+    def set_default_unclassified(self, parent_name: str):
+        """Sets the default ontology parent for unclassified terms."""
+        self.onto_manager.default_unclassified_parent = parent_name
+        return f"Default unclassified parent set to {parent_name}"
+
+    def list_protected_closure(self) -> list[str]:
+        """Returns the list of all classes in the protected hierarchy."""
+        return self.onto_manager.list_protected_closure()
+
     def evaluate_hypothesis(self, hypothesis: str) -> dict[str, Any]:
         """
         Evaluates a natural language hypothesis against the current knowledge graph.
@@ -449,27 +464,38 @@ class HIPAIManager:
                 has_pos = res.result_set[0][0] is True
                 has_neg = res.result_set[0][1] is True
 
-            if has_pos:
-                return {
-                    "entailment": (
-                        "Entailed" if ptype != "negative_property" else "Contradicted"
-                    ),
-                    "evidence": (
-                        f"Found direct evidence for property " f"{prop} on {subj_id}."
-                    ),
-                    "logical_form": f"{prop}({subj_id})",
-                }
+            entailment = "Undetermined"
+            contradicted = False
+            evidence = f"No direct evidence for property {prop} on {subj_id}."
+
+            if has_pos and has_neg:
+                entailment = (
+                    "Entailed" if ptype != "negative_property" else "Contradicted"
+                )
+                contradicted = True
+                evidence = f"CONTRADICTION: Found both positive and negative evidence for property {prop} on {subj_id}."
+            elif has_pos:
+                entailment = (
+                    "Entailed" if ptype != "negative_property" else "Contradicted"
+                )
+                evidence = f"Found direct evidence for property {prop} on {subj_id}."
             elif has_neg:
-                return {
-                    "entailment": (
-                        "Contradicted" if ptype != "negative_property" else "Entailed"
-                    ),
-                    "evidence": (
-                        f"Found contradictory evidence for property "
-                        f"{prop} on {subj_id}."
-                    ),
-                    "logical_form": f"NOT {prop}({subj_id})",
+                entailment = (
+                    "Contradicted" if ptype != "negative_property" else "Entailed"
+                )
+                evidence = (
+                    f"Found contradictory evidence for property {prop} on {subj_id}."
+                )
+
+            if entailment != "Undetermined":
+                res_dict = {
+                    "entailment": entailment,
+                    "evidence": evidence,
+                    "logical_form": f"{'NOT ' if has_neg and not has_pos else ''}{prop}({subj_id})",
                 }
+                if contradicted:
+                    res_dict["contradicted"] = True
+                return res_dict
 
             # Syllogistic subsumption check
             if ptype == "class_membership":
@@ -485,6 +511,11 @@ class HIPAIManager:
                     q_sub, params={"id": subj_id, "concept": concept}
                 )
                 if res_sub.result_set:
+                    has_sub_pos = False
+                    # Note: FalkorDB doesn't easily support NOT relations in path traversal
+                    # so we only check for positive entailment here. Negative entailment
+                    # via subsumption would require a separate NOT_IS_A scan.
+
                     for row in res_sub.result_set:
                         c_name = row[0]
                         modality = row[1]
@@ -492,14 +523,18 @@ class HIPAIManager:
                         if c_name == concept:
                             if modality in ["can", "may", "possible", "might", "could"]:
                                 continue
-                            return {
-                                "entailment": "Entailed",
-                                "evidence": (
-                                    f"Subsumption found: {subj_id} is "
-                                    f"instance of {concept} (modality: {modality})."
-                                ),
-                                "logical_form": f"{concept}({subj_id})",
-                            }
+                            has_sub_pos = True
+                            break
+
+                    if has_sub_pos:
+                        return {
+                            "entailment": "Entailed",
+                            "evidence": (
+                                f"Subsumption found: {subj_id} is "
+                                f"instance of {concept}."
+                            ),
+                            "logical_form": f"{concept}({subj_id})",
+                        }
             elif ptype in ["property", "negative_property", "property_assignment"]:
                 q_sub = (
                     "MATCH (n:Entity {id: $id})"
@@ -513,47 +548,54 @@ class HIPAIManager:
                 res_sub = self.world_model.graph.query(q_sub, params={"id": subj_id})
 
                 if res_sub.result_set:
+                    has_sub_pos = False
+                    has_sub_neg = False
+
                     for row in res_sub.result_set:
                         modality = row[2]
+                        if modality in ["can", "may", "possible", "might", "could"]:
+                            continue
+
                         if row[0] is True:
-                            if (
-                                modality in ["can", "may", "possible", "might", "could"]
-                                and ptype == "property"
-                            ):
-                                continue
-                            return {
-                                "entailment": (
-                                    "Entailed"
-                                    if ptype != "negative_property"
-                                    else "Contradicted"
-                                ),
-                                "evidence": (
-                                    f"Subsumption found: {subj_id} is "
-                                    f"instance of concept with property "
-                                    f"{prop_sanitized} (modality: {modality})."
-                                ),
-                                "logical_form": f"{prop_sanitized}({subj_id})",
-                            }
-                        elif row[1] is True:
-                            if (
-                                modality in ["can", "may", "possible", "might", "could"]
-                                and ptype == "property"
-                            ):
-                                continue
-                            return {
-                                "entailment": (
-                                    "Contradicted"
-                                    if ptype != "negative_property"
-                                    else "Entailed"
-                                ),
-                                "evidence": (
-                                    f"Subsumption found: {subj_id} is "
-                                    f"instance of concept with negative "
-                                    f"property {prop_sanitized} "
-                                    f"(modality: {modality})."
-                                ),
-                                "logical_form": f"NOT {prop_sanitized}({subj_id})",
-                            }
+                            has_sub_pos = True
+                        if row[1] is True:
+                            has_sub_neg = True
+
+                    if has_sub_pos or has_sub_neg:
+                        entailment = "Undetermined"
+                        contradicted = False
+
+                        if has_sub_pos and has_sub_neg:
+                            entailment = (
+                                "Entailed"
+                                if ptype != "negative_property"
+                                else "Contradicted"
+                            )
+                            contradicted = True
+                            evidence = f"CONTRADICTION: Subsumption found both positive and negative evidence for property {prop_sanitized} on {subj_id}."
+                        elif has_sub_pos:
+                            entailment = (
+                                "Entailed"
+                                if ptype != "negative_property"
+                                else "Contradicted"
+                            )
+                            evidence = f"Subsumption found: {subj_id} is instance of concept with property {prop_sanitized}."
+                        elif has_sub_neg:
+                            entailment = (
+                                "Contradicted"
+                                if ptype != "negative_property"
+                                else "Entailed"
+                            )
+                            evidence = f"Subsumption found: {subj_id} is instance of concept with negative property {prop_sanitized}."
+
+                        res_dict = {
+                            "entailment": entailment,
+                            "evidence": evidence,
+                            "logical_form": f"{'NOT ' if has_sub_neg and not has_sub_pos else ''}{prop_sanitized}({subj_id})",
+                        }
+                        if contradicted:
+                            res_dict["contradicted"] = True
+                        return res_dict
 
             return {
                 "entailment": "Undetermined",
@@ -578,22 +620,12 @@ class HIPAIManager:
             )
 
             if res.result_set:
+                has_rel_pos = False
+                has_rel_neg = False
+
                 for row in res.result_set:
                     modality = row[0]
                     tv = row[1]
-
-                    if tv == 0:
-                        return {
-                            "entailment": "Contradicted",
-                            "evidence": (
-                                f"Found negative relation {rel.relation_type} "
-                                f"between {rel.source_id} and {rel.target_id}."
-                            ),
-                            "logical_form": (
-                                f"NOT {rel.relation_type}"
-                                f"({rel.source_id}, {rel.target_id})"
-                            ),
-                        }
 
                     if modality in [
                         "can",
@@ -602,28 +634,36 @@ class HIPAIManager:
                         "might",
                         "could",
                     ] and rel.modality in [None, "assertive"]:
-                        return {
-                            "entailment": "Undetermined",
-                            "evidence": (
-                                f"Found possibility ('{modality}') relation, "
-                                "but hypothesis asserts actuality."
-                            ),
-                            "logical_form": (
-                                f"? {rel.relation_type}"
-                                f"({rel.source_id}, {rel.target_id})"
-                            ),
-                        }
+                        continue
 
-                    return {
-                        "entailment": "Entailed",
-                        "evidence": (
-                            f"Found relation {rel.relation_type} "
-                            f"between {rel.source_id} and {rel.target_id}."
-                        ),
-                        "logical_form": (
-                            f"{rel.relation_type}" f"({rel.source_id}, {rel.target_id})"
-                        ),
+                    if tv == 0:
+                        has_rel_neg = True
+                    else:
+                        has_rel_pos = True
+
+                if has_rel_pos or has_rel_neg:
+                    entailment = "Undetermined"
+                    contradicted = False
+
+                    if has_rel_pos and has_rel_neg:
+                        entailment = "Entailed"
+                        contradicted = True
+                        evidence = f"CONTRADICTION: Found both positive and negative relation {rel.relation_type} between {rel.source_id} and {rel.target_id}."
+                    elif has_rel_pos:
+                        entailment = "Entailed"
+                        evidence = f"Found relation {rel.relation_type} between {rel.source_id} and {rel.target_id}."
+                    elif has_rel_neg:
+                        entailment = "Contradicted"
+                        evidence = f"Found negative relation {rel.relation_type} between {rel.source_id} and {rel.target_id}."
+
+                    res_dict = {
+                        "entailment": entailment,
+                        "evidence": evidence,
+                        "logical_form": f"{'NOT ' if has_rel_neg and not has_rel_pos else ''}{rel.relation_type}({rel.source_id}, {rel.target_id})",
                     }
+                    if contradicted:
+                        res_dict["contradicted"] = True
+                    return res_dict
 
             return {
                 "entailment": "Undetermined",

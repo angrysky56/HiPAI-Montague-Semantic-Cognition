@@ -63,10 +63,44 @@ Plans:
 
 ### Phase 9: Formal Verification Foundation (Isabelle)
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 8
-**Plans:** 0 plans
+**Goal:** Integrate Isabelle 2025-2 and verify the Paraclete Protocol foundation.
+**Requirements:** isabelle-2025-2
+**Depends on:** Phase 1-6
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 9 to break down)
+- [x] 09-01: Isabelle 2025-2 environment installation and session configuration
+- [x] 09-02: Paraclete_Foundation.thy meta-theorems and Makefile integration
+- [x] 09-03: MCP tool integration for machine-checked logic verification
+
+### Phase 10: Framework Reframing & Belief Dynamics (v0.7)
+
+**Goal:** Lift HiPAI from "the Paraclete implementation" to "a framework for declarative structural-ethics reasoning, with the Paraclete as one configuration." Includes the audit-driven correction of the keyword-coupled gate (Phase A) and the parametric formalization of subsumption-based gating + paraconsistent escalation (Phase B).
+
+**Requirements:** isabelle-2025-2, sentence-transformers (or EmbeddingGemma), `Hierarchy_Soundness.thy`, `Belief_Dynamics.thy`
+
+**Depends on:** Phase 9
+
+**Background:** `docs/logic/RESOLUTION_AUDIT.md` exposed that the v0.5–v0.6 gate was a literal-string check on `Concept_Patient`, with the OWL hierarchy beneath it essentially empty. The Isabelle proof from Phase 9 was structurally sound but proved theorems about an abstract model the implementation didn't realize. Phase 10 closes that gap.
+
+#### Phase A — Framework reframing (LANDED, 2026-05-06)
+
+Plans:
+- [x] 10A-01: Real protected hierarchy seeded under `Concept_Patient`
+- [x] 10A-02: `_resolve_or_create_class` with embedding-anchored parent selection
+- [x] 10A-03: `WorldModel._classify_class_term` (sentence-transformer cosine match)
+- [x] 10A-04: `calibrate_belief` polarity-aware source counting (audit §5.1 fix)
+- [x] 10A-05: Smoke test `tests/test_framework_reframing.py` covering 5 probe groups
+- [x] 10A-06: Idempotent reseed on every init (free migration for existing DBs)
+
+See `docs/logic/PHASE_A_NOTES.md` for the change set and validation procedure.
+
+#### Phase B — MCP primitives + parametric Isabelle (LANDED, 2026-05-06)
+
+Plans:
+- [x] 10B-01: MCP tools: `declare_class_hierarchy`, `set_default_unclassified`, `list_protected_closure`
+- [x] 10B-02: Move Paraclete-specific subhierarchy into a swappable config (`paraclete_config.py`); `seed_axioms()` retains only framework classes
+- [x] 10B-03: `Hierarchy_Soundness.thy` — parametric theorem `∀ H. well_formed(H) ⟹ gate_correct_wrt(H)`. Phase 1's theorem becomes a corollary
+- [x] 10B-04: `Belief_Dynamics.thy` — Belnap-4 paraconsistent state + source-count + conservative-default. Meta-theorem: escalation pipeline is monotone-toward-FINAL_BLOCK relative to the gate (per audit §4)
+- [x] 10B-05: `evaluate_hypothesis` returns `contradicted` flag when both `p` and `¬p` hold (audit §5.4 fix)
+- [x] 10B-06: EmbeddingGemma swap (308M, 100+ languages, MRL-truncatable). Mechanical change; retune MID/HIGH thresholds afterwards.

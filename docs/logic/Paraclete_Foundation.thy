@@ -48,7 +48,7 @@ section \<open>2. The disjointness gates (T1 axioms)\<close>
 
 text \<open>
   Mirrors @{verbatim "AllDisjoint([Concept_Action, Concept_Agent, Concept_Patient])"}
-  from @{file \<open>src/hipai/ontology_manager.py\<close>}.
+  from @{file \<open>../../src/hipai/ontology_manager.py\<close>}.
 
   Disjointness is encoded as: no individual can carry two of these tags.
   Because @{type concept} is a finite enumeration with each individual
@@ -120,7 +120,7 @@ section \<open>5. Meta-theorem 2: Gate soundness\<close>
 
 text \<open>
   If a triple is classified as forbidden under axiom set @{term A}, then
-  it remains forbidden under any *extension* @{term B \<supseteq> A}. This is
+  it remains forbidden under any *extension* @{term "A \<subseteq> B"}. This is
   the formal statement of the runtime claim "no utilitarian argument,
   virtue appeal, or contextual framing can override a T1 block".
 \<close>

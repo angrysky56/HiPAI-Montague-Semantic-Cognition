@@ -70,6 +70,7 @@ Every action affecting an entity follows a mandatory three-flank sequence:
 - Python 3.12+
 - `uv` (dependency and environment management)
 - Java Runtime (required for HermiT reasoner)
+- Isabelle 2025-2 (optional, required for formal logic verification)
 - Neo4j (optional, for read-model projection)
 
 ## Installation
@@ -90,6 +91,7 @@ uv run python src/ontology_manager.py --init
 | `evaluate_hypothesis(...)` | Test statement via DL entailment |
 | `get_current_state()` | Snapshot of the current ontology state |
 | `clear_graph()` | Reset the world model (preserving T1 axioms) |
+| `verify_logic_foundation()` | Run Isabelle machine-checked proof for T1 foundation |
 
 ---
 *Operationalized under the TMI (Toward Transcendent Moral Instrumentality) framework.*

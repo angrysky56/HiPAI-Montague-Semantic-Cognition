@@ -91,31 +91,21 @@ A compact Isabelle/HOL theory that:
 A starter version of this file ships at `docs/logic/Paraclete_Foundation.thy`
 in this commit.
 
-### Phase 2 — `EBE_Theorem.thy`  (medium effort, novel)
+### Phase 2 — `Belief_Dynamics.thy` (Belief Revision & Resolution)
 
-Mechanise the Epistemic Burden of Evidence theorem currently referenced
-in the README and in `paraclete_vector7_epistemic_deontological.pdf`.
+Combine Modal Logic for static resolution and AGM postulates for dynamics. This is the highest-leverage addition, providing a verified spec for how the system *moves* at runtime.
 
-Specifically: prove the theorem `InZone3 ⟹ SeeksDisconfirmation`
-formally. The system *runtime* satisfies this obligation by virtue of
-the `calibrate_belief` step in the three-flank workflow. The Isabelle
-proof would show the *implementation* refines the theorem's specification.
-This is the same pattern the seL4 verification used: an abstract spec
-and a concrete refinement, both checked.
+* **Modal Resolution (Q2):** Formalise the resolution rule for conflicting attitudes (beliefs about beliefs) using Kripke structures (K/S4/S5). Prove that resolution preserves consistency.
+* **Tiered AGM Revision (Q3):** Map HiPAI's tiered model (T1/T2/T3) to AGM postulates. Prove that "T1-respecting revision satisfies the AGM postulates within the T2/T3 layer."
+* **Goal:** A machine-checked specification for the `ParacleteProtocol.calibrate_belief` and `escalate_block` logic.
 
-### Phase 3 — Montague-in-Pure  (long-term research)
+### Phase 3 — Controlled Formal Language (Verified Parser)
 
-Montague's *Universal Grammar* is fundamentally a typed lambda calculus
-plus an intensional logic. Isabelle/Pure **is** a typed lambda calculus
-plus meta-implication and meta-quantification. So Montague's translation
-schema maps very cleanly into Pure as an *object logic*. This would let
-HiPAI's intensional translations (right now done by spaCy + Python) be
-replaced by, or cross-checked against, a formally-typed compositional
-semantics.
+Instead of verifying arbitrary English, define a **Controlled Formal Language (CFL)** fragment for core HiPAI patterns.
 
-The 1911.00399 thesis on HoTT-in-Pure is a directly applicable template.
-The work is non-trivial, but the resulting deliverable would be unique
-in the alignment-research literature.
+* **Fragment:** "All X are Y", "A believes that P", "X causes Y".
+* **Verified Parser:** Write a verified parser in Isabelle for this fragment.
+* **Hybrid Pipeline:** spaCy handles arbitrary text (flagged as "unverified translation"), while the verified parser handles the CFL fragment (flagged as "mechanically parsed").
 
 ---
 

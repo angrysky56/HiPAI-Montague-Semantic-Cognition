@@ -1,0 +1,5 @@
+session HiPAI_Foundation = HOL +
+  theories
+    Paraclete_Foundation
+    Hierarchy_Soundness
+    Belief_Dynamics

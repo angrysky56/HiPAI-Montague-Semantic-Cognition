@@ -129,8 +129,9 @@ async def evaluate_hypothesis(hypothesis: str) -> str:
     Supports: 'X is Y', 'X has Y', 'X causes Y', 'X exploits Y', and other patterns.
     Falls back to semantic search when structured parsing fails."""
     res = await asyncio.to_thread(hi_pai.evaluate_hypothesis, hypothesis)
+    contradicted_str = "\nStatus: ⚠️ CONTRADICTED" if res.get("contradicted") else ""
     return (
-        f"Entailment: {res['entailment']}\n"
+        f"Entailment: {res['entailment']}{contradicted_str}\n"
         f"Evidence: {res['evidence']}\n"
         f"Logical Form: {res['logical_form']}"
     )
@@ -465,8 +466,53 @@ async def escalate_block(
     return report
 
 
+@mcp.tool()
+@mcp_tool_handler
+async def verify_logic_foundation() -> str:
+    """
+    Triggers a machine-checked verification of the Paraclete T1 foundation.
+    Runs Isabelle 2025-2 to prove consistency, gate soundness, and monotonicity.
+    Requires Isabelle to be installed. This provides mathematical certainty
+    that the core safety axioms are logically sound.
+    """
+    res = await asyncio.to_thread(hi_pai.world_model.paraclete.verify_foundation)
+
+    status_emoji = "✅" if res["success"] else "❌"
+    report = (
+        f"### Logic Foundation Verification {status_emoji}\n\n"
+        f"**Message**: {res['message']}\n\n"
+        f"**Details**:\n```text\n{res['output'][-1000:] if res['output'] else 'No output available.'}\n```\n"
+    )
+    return report
+
+
 def main():
     mcp.run()
+
+
+@mcp.tool()
+async def declare_class_hierarchy(parent_name: str, children_names: list[str]) -> str:
+    """Dynamically declare a set of classes as subclasses of a parent in the ontology.
+    Example: parent_name='Concept_Patient', children_names=['Concept_Elderly', 'Concept_Disabled']
+    """
+    res = await asyncio.to_thread(
+        hi_pai.declare_class_hierarchy, parent_name, children_names
+    )
+    return f"Successfully declared hierarchy for {parent_name}: {', '.join(res)}"
+
+
+@mcp.tool()
+async def set_default_unclassified(parent_name: str) -> str:
+    """Set the default ontology class for unclassified/low-confidence terms.
+    Default is 'Concept_PossiblyPatient'."""
+    return await asyncio.to_thread(hi_pai.set_default_unclassified, parent_name)
+
+
+@mcp.tool()
+async def list_protected_closure() -> str:
+    """Return the list of all classes that fall under the protected 'Concept_Patient' hierarchy."""
+    res = await asyncio.to_thread(hi_pai.list_protected_closure)
+    return f"Protected Hierarchy Closure: {', '.join(res)}"
 
 
 if __name__ == "__main__":
