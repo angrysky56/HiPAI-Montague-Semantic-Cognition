@@ -4,6 +4,9 @@ import asyncio
 import atexit
 import json
 import logging
+import os
+import signal
+import sys
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -16,12 +19,67 @@ from hipai.synthesis import HIPAIManager
 # Initialize FastMCP Server
 mcp = FastMCP("HiPAI Server")
 
-# Initialize HIPAIManager
-# This instance manages both WorldModel and Synthesizer
-hi_pai = HIPAIManager(graph_name="hipai_world")
+# ---------------------------------------------------------------------------
+# Per-client world isolation.
+#
+# owlready2's quadstore is architecturally single-writer (it runs ANALYZE on
+# every Graph.__init__, which takes a SQLite write lock). When two MCP hosts
+# (e.g. Claude Desktop + Antigravity) both spawn a hipai-montague server,
+# they would race on world.db and one would fail with "database is locked".
+#
+# The ``HIPAI_CLIENT_ID`` env var, set per MCP host config, gives each host
+# its own world_<id>.db file (and matching FalkorDB graph namespace) via
+# the existing world_id plumbing in HIPAIManager / WorldModel. The cost is
+# that state is not shared across hosts. For shared-state operation you
+# need exactly one hipai server running at a time.
+# ---------------------------------------------------------------------------
+_CLIENT_ID = os.environ.get("HIPAI_CLIENT_ID")  # e.g. "claude", "antigravity"
 
-# Register shutdown hook
-atexit.register(hi_pai.close)
+hi_pai = HIPAIManager(
+    graph_name="hipai_world",
+    session_id=_CLIENT_ID,
+)
+
+# ---------------------------------------------------------------------------
+# Shutdown plumbing.
+#
+# atexit covers normal interpreter exit (return from main, sys.exit()), but
+# does NOT fire on SIGTERM/SIGINT/SIGHUP unless we wire signal handlers. The
+# MCP host (e.g. Claude Desktop) typically sends SIGTERM when stopping the
+# server, so without these handlers a tiny window exists where the SQLite
+# WAL is left non-consolidated. The OntologyManager's startup recovery pass
+# handles even SIGKILL, but signal-driven graceful close is still preferred.
+# ---------------------------------------------------------------------------
+
+_already_closed = False
+
+
+def _close_once() -> None:
+    """Idempotent close: safe to call from atexit AND a signal handler."""
+    global _already_closed
+    if _already_closed:
+        return
+    _already_closed = True
+    try:
+        hi_pai.close()
+    except Exception as e:  # pylint: disable=broad-except
+        # We deliberately swallow here -- we're already shutting down and
+        # raising would just produce noisier exit logs.
+        logging.getLogger(__name__).error("Error during HiPAI close: %s", e)
+
+
+def _signal_handler(signum, _frame) -> None:
+    logging.getLogger(__name__).info(
+        "Received signal %d; closing HiPAI cleanly...", signum
+    )
+    _close_once()
+    # Re-raise default behaviour: the host expects the process to exit.
+    sys.exit(0)
+
+
+atexit.register(_close_once)
+signal.signal(signal.SIGTERM, _signal_handler)
+signal.signal(signal.SIGINT, _signal_handler)
 
 
 # Configure logger

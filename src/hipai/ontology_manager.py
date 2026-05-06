@@ -31,11 +31,30 @@ class OntologyManager:
             db_path if db_path == ":memory:" else str(Path(db_path).resolve())
         )
 
-        # Pre-configure WAL mode at the file level BEFORE owlready2 opens the
-        # database. WAL mode is a persistent file-level setting, so setting it
-        # via a separate connection that is immediately closed ensures owlready2
-        # opens in WAL mode (rather than rollback-journal mode, which takes
-        # EXCLUSIVE locks and blocks all other connections).
+        # ------------------------------------------------------------------
+        # Startup recovery pass.
+        #
+        # Root cause of the historical "database is locked" issue on restart:
+        # owlready2's World() defaults to ``exclusive=True``, which issues
+        # ``PRAGMA locking_mode = EXCLUSIVE`` on its sqlite3 connection. That
+        # mode holds DB file locks for the entire connection lifetime and is
+        # released only on a clean ``db.close()``. If the MCP host kills the
+        # server (SIGKILL, OOM, parent process exit) before atexit runs, the
+        # WAL/SHM files can be left in a state where the next open blocks.
+        #
+        # The fix is two-pronged:
+        #
+        #   1. Open a short-lived recovery connection here that
+        #      (a) puts the DB in WAL mode (idempotent),
+        #      (b) runs ``wal_checkpoint(TRUNCATE)`` to drain any pending
+        #          frames left by a prior unclean shutdown,
+        #      (c) closes immediately so the file is unlocked.
+        #
+        #   2. Open the actual World() with ``exclusive=False`` and
+        #      ``journal_mode="WAL"`` -- this is owlready2's canonical
+        #      multi-process / restart-resilient pattern (see
+        #      https://owlready2.readthedocs.io/en/latest/world.html).
+        # ------------------------------------------------------------------
         if self.db_path != ":memory:":
             db_file = Path(self.db_path)
             if db_file.exists():
@@ -43,6 +62,11 @@ class OntologyManager:
                     pre_conn = sqlite3.connect(self.db_path, timeout=10.0)
                     pre_conn.execute("PRAGMA busy_timeout = 10000")
                     mode = pre_conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                    # Drain leftover WAL from a prior unclean shutdown. In WAL
+                    # mode this consolidates pending frames into the main DB
+                    # file so any subsequent opener sees a fully-recovered
+                    # state with no held locks.
+                    pre_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     pre_conn.commit()
                     pre_conn.close()
                     if mode and mode[0] != "wal":
@@ -53,15 +77,27 @@ class OntologyManager:
                             mode[0] if mode else "unknown",
                         )
                 except sqlite3.Error as e:
-                    logger.warning("Pre-WAL setup failed for %s: %s", self.db_path, e)
+                    logger.warning(
+                        "Recovery checkpoint failed for %s: %s", self.db_path, e
+                    )
 
-        # Retry logic for locked database
+        # Retry logic for locked database (belt-and-suspenders for the rare
+        # case that recovery couldn't fully drain the WAL on this open).
         retries = 5
         attempt = 0
         last_err = None
         while attempt < retries:
             try:
-                self.world = World(filename=self.db_path)
+                # exclusive=False  -> no PRAGMA locking_mode = EXCLUSIVE,
+                #                     so OS-level file locks are released
+                #                     promptly and SQLite recovery is automatic.
+                # journal_mode="WAL" -> set on owlready2's own connection,
+                #                      keeps WAL semantics on every reopen.
+                self.world = World(
+                    filename=self.db_path,
+                    exclusive=False,
+                    journal_mode="WAL",
+                )
                 self.world.graph.db.execute("PRAGMA busy_timeout = 10000")
                 break
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
@@ -99,9 +135,31 @@ class OntologyManager:
     def close(self):
         """
         Closes the SQLite world backend.
+
+        Performs a best-effort save and a ``wal_checkpoint(TRUNCATE)`` before
+        closing so the WAL is consolidated into the main DB file. This leaves
+        zero pending WAL frames, which means the next open is trivially clean
+        even if the next process's recovery pass is delayed or skipped.
         """
         if hasattr(self, "world"):
             try:
+                # 1. Best-effort flush of any pending owlready2 changes.
+                try:
+                    self.world.save()
+                except Exception as save_err:  # pylint: disable=broad-except
+                    logger.warning("Pre-close save skipped: %s", save_err)
+
+                # 2. Consolidate WAL -> main DB file. Cheap and idempotent.
+                try:
+                    self.world.graph.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except (sqlite3.Error, AttributeError) as ckpt_err:
+                    logger.debug(
+                        "WAL checkpoint skipped on close (non-WAL or already "
+                        "closed): %s",
+                        ckpt_err,
+                    )
+
+                # 3. Release the connection.
                 self.world.close()
             except (sqlite3.Error, RuntimeError) as e:
                 logger.error("Error closing world: %s", e, exc_info=True)

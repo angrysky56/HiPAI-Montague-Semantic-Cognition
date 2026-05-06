@@ -67,4 +67,16 @@ self.ontology = OntologyManager(db_path="world.db")
 ```
 
 ---
+
+## 4. Epistemic Floor Policy (T1)
+
+### Path A (BLOCK_CHALLENGED) vs. Deontic Floor
+In v0.6, the EBE chain implements a **Deontic Floor** policy for T1 Emergency Brake gates.
+
+- **Sticky Classification**: Once an entity is classified as protected (e.g., `MoralPatient`), the system defaults to a conservative stance.
+- **Polarity-Blind Source Counting**: Currently, `calibrate_belief` counts any mention of an entity's status as an epistemic source, regardless of polarity (e.g., "X is not a patient" is counted as a source mention).
+- **Conservative Default**: This results in `BLOCK_CONFIRMED` or `BLOCK_UNCERTAIN` even under active negation, preventing Path A from yielding to simple linguistic disconfirmation.
+- **Future Intent**: Policy decision pending on whether to move to a **Bayesian Polarity-Aware** mode (where `NOT_IS_A` reduces source count and allows Path A to yield).
+
+---
 *Index at 124 pages (Wiki Mirror)*

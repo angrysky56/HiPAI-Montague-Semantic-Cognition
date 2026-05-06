@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.6-advanced-cognition
-milestone_name: v0.6 Advanced Cognition
-status: completed
-last_updated: "2026-05-04T17:30:00Z"
+milestone: v0.7-executive-logic
+milestone_name: v0.7 Executive Logic
+status: in-progress
+last_updated: "2026-05-04T19:46:00Z"
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 25
+  total_phases: 8
+  completed_phases: 7
+  total_plans: 30
   completed_plans: 25
 ---
 
@@ -15,28 +15,28 @@ progress:
 
 ## Project Reference
 
-See: `DESIGN.md` (v0.6)
+See: `DESIGN.md` (v0.6.1 - Epistemic Policy Update)
 
-**Core value:** Recursive attitude logic and graph-driven entity disambiguation.
+**Core value:** Multi-perspective synthesis and counter-hypothesis generation.
 
 ## Current Phase
-**Phase 7: Executive Logic (Synthesis & Counter-Hypothesis)**
+**Phase 8: Synthesis Calibration & Polarity (v0.7)**
 
 ## Status
-**Status:** ✅ COMPLETED (v0.6 Finalized)
-**Progress:** 100%
+**Status:** 🏗️ INITIALIZING (v0.7)
+**Progress:** 85%
 **Last Update:** 2026-05-04
 
 ## Recent Achievements
-- [x] Phase 6: Advanced Cognition (Recursive Logic & Ambiguity) completed.
-- [x] Implemented recursive attitude extraction (beliefs about beliefs).
-- [x] Implemented hardened ambiguity resolution with semantic similarity.
-- [x] Standardized entity ID handling for compound names (e.g., "Alice Smith").
-- [x] Implemented Cognitive Depth Throttling (Recursion Control).
-- [x] Fixed database locking regressions and initialization bugs.
+- [x] Phase 7: Executive Logic (Synthesis & Counter-Hypothesis) initialized.
+- [x] Fixed Baseline Axiom Lookup in Paraclete EBE chain.
+- [x] Documented **Deontic Floor** policy for T1 gates in `DESIGN.md`.
+- [x] Added regression test `tests/test_path_a_polarity.py` for polarity-blind source counting.
 
 ## Session Context
 
-**Current objective:** Initialize Milestone v0.7 (Executive Logic).
-**Active phase:** 7
+**Current objective:** Plan v0.7 Synthesis Calibration & Polarity pass.
+**Active phase:** 8
 **Active plan:** None
+
+**Note on Path A:** Current system implements a "Deontic Floor" where negations (NOT_IS_A) are counted as source mentions, strengthening the gate rather than weakening it. Decision on Bayesian shift deferred to v0.7.
