@@ -35,10 +35,32 @@ mcp = FastMCP("HiPAI Server")
 # ---------------------------------------------------------------------------
 _CLIENT_ID = os.environ.get("HIPAI_CLIENT_ID")  # e.g. "claude", "antigravity"
 
-hi_pai = HIPAIManager(
-    graph_name="hipai_world",
-    session_id=_CLIENT_ID,
-)
+# 1. Force environment variables to suppress library noise
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+# 2. Silence noisy library loggers (Transformers, etc.)
+logging.basicConfig(level=logging.WARNING, force=True) # force=True overrides existing config
+logging.getLogger().setLevel(logging.WARNING)
+logging.getLogger("mcp").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("falkordb").setLevel(logging.WARNING)
+
+# 3. Redirect stdout to stderr for the duration of HIPAIManager initialization.
+# This prevents libraries from writing progress bars or messages to stdout,
+# which would corrupt the MCP JSON-RPC stream used by FastMCP.
+_original_stdout = sys.stdout
+sys.stdout = sys.stderr
+
+try:
+    hi_pai = HIPAIManager(
+        graph_name="hipai_world",
+        session_id=_CLIENT_ID,
+    )
+finally:
+    # Restore stdout before calling mcp.run()
+    sys.stdout = _original_stdout
 
 # ---------------------------------------------------------------------------
 # Shutdown plumbing.

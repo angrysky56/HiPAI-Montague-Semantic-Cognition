@@ -39,7 +39,7 @@ class WorldModel:
 
     def __init__(
         self,
-        host: str = "localhost",
+        host: str = "127.0.0.1",
         port: int = 6380,
         graph_name: str = "hipai",
         db_path: str = "world.db",
