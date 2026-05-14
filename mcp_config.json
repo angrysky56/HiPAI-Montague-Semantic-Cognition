@@ -11,7 +11,8 @@
         "hipai.mcp_server"
       ],
       "env": {
-        "PYTHONPATH": "src"
+        "PYTHONPATH": "src",
+        "HIPAI_CLIENT_ID": "your-client-name"
       }
     }
   }
