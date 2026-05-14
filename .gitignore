@@ -14,6 +14,15 @@ wheels/
 hipai_world.db
 *.db-shm
 *.db-wal
+*.db-journal
+
 # Temporary files and scratch
 *.txt
 scratch/
+
+# Tool-specific directories
+.claude/
+.agent/
+.trunk/
+.ruff_cache/
+.pytest_cache/
