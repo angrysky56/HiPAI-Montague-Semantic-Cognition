@@ -68,7 +68,12 @@ class WorldModel:
 
         # Initialize or retrieve embedding model
         if _EMBEDDING_MODEL is None:
-            model_name = "google/embeddinggemma-300m"
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+            except ImportError:
+                pass
+            model_name = os.environ.get("EMBEDDING_MODEL_NAME", "google/embeddinggemma-300m")
             try:
                 # Attempt strictly offline load first to avoid network HEAD requests
                 logger.info("Attempting offline load for '%s'...", model_name)
@@ -125,6 +130,47 @@ class WorldModel:
 
     def _ensure_graph(self):
         """Ensure we are connected to the right graph and indices are set up."""
+        # Check and drop mismatched vector indices
+        try:
+            res = self.graph.query("CALL db.indexes()")
+            if res and res.result_set:
+                for row in res.result_set:
+                    if len(row) >= 4 and row[2] == "VECTOR":
+                        label = row[0]
+                        prop = row[1]
+                        options = row[3]
+                        if prop == "embedding" and label in ("Entity", "Concept", "Domain"):
+                            dim = None
+                            if isinstance(options, dict):
+                                dim = options.get("dimension")
+                            elif isinstance(options, str):
+                                import re
+                                m = re.search(r"dimension=(\d+)", options)
+                                if m:
+                                    dim = int(m.group(1))
+
+                            if dim is not None and dim != self.vector_dim:
+                                logger.warning(
+                                    "Mismatched dimension detected for index on %s(%s): "
+                                    "expected %d, got %d. Re-creating index.",
+                                    label,
+                                    prop,
+                                    self.vector_dim,
+                                    dim,
+                                )
+                                try:
+                                    self.graph.query(
+                                        f"DROP VECTOR INDEX FOR (n:{label}) (n.{prop})"
+                                    )
+                                except Exception as drop_err:
+                                    logger.warning(
+                                        "Failed to drop vector index on %s: %s",
+                                        label,
+                                        drop_err,
+                                    )
+        except Exception as e:
+            logger.debug("Failed to check or drop mismatched indexes: %s", e)
+
         # Create vector indices if they don't exist
         try:
             self.graph.query(

@@ -26,3 +26,6 @@ scratch/
 .trunk/
 .ruff_cache/
 .pytest_cache/
+
+# Environment variables
+.env

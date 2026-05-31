@@ -33,7 +33,8 @@ class ClaimExtractor:
                 "some",
                 "any",
             ):
-                quantifier = child.lemma_.lower()
+                lemma_val = child.lemma_.lower()
+                quantifier = "all" if lemma_val in ("every", "any") else lemma_val
             elif child.dep_ == "quantmod" or child.dep_ == "nummod":
                 quantifier = child.text.lower()
 
@@ -82,8 +83,19 @@ class ClaimExtractor:
                 _, subject_id = self._get_full_name_and_id(child)
                 # Check for quantifier on subject
                 for grand in child.children:
-                    if grand.dep_ == "det" and grand.lemma_.lower() in ("all", "no"):
-                        quantifier = grand.lemma_.lower()
+                    if grand.dep_ == "det" and grand.lemma_.lower() in (
+                        "all",
+                        "no",
+                        "every",
+                        "some",
+                        "any",
+                    ):
+                        lemma_val = grand.lemma_.lower()
+                        quantifier = (
+                            "all"
+                            if lemma_val in ("every", "any")
+                            else lemma_val
+                        )
                 break
 
         if not subject_id:

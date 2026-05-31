@@ -15,8 +15,19 @@ def get_nlp(model: str = "en_core_web_md"):
         try:
             _nlp = spacy.load(model)
         except OSError:
-            # trunk-ignore(bandit/B605)
-            os.system(f"python -m spacy download {model}")
+            import re
+            import subprocess
+            import sys
+
+            # Validate the model name format to prevent command injection
+            if not re.match(r"^[a-zA-Z0-9_-]+$", model):
+                raise ValueError(f"Invalid model name format: {model}") from None
+
+            # Use subprocess with a list argument for safe execution
+            subprocess.run(
+                [sys.executable, "-m", "spacy", "download", model],
+                check=True,
+            )
             _nlp = spacy.load(model)
     return _nlp
 

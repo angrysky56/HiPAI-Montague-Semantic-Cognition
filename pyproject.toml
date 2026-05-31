@@ -22,6 +22,7 @@ dependencies = [
     "inflect>=7.5.0",
     "spacy>=3.7.0",
     "owlready2>=0.46",
+    "dotenv>=0.9.9",
 ]
 [project.scripts]
 hipai-mcp = "hipai.mcp_server:main"
@@ -39,7 +40,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N", "PTH", "RUF"]
-ignore = []
+ignore = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
