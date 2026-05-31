@@ -27,6 +27,7 @@ def get_nlp(model: str = "en_core_web_md"):
             subprocess.run(
                 [sys.executable, "-m", "spacy", "download", model],
                 check=True,
+                capture_output=True,
             )
             _nlp = spacy.load(model)
     return _nlp

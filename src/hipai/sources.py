@@ -56,4 +56,5 @@ class WebScraperSource(BaseSource):
                 text = soup.get_text(separator=" ", strip=True)
                 yield text
         except Exception as e:
-            print(f"Failed to fetch {self.url}: {e}")
+            import logging
+            logging.getLogger(__name__).error(f"Failed to fetch {self.url}: {e}")
