@@ -570,6 +570,7 @@ class OntologyManager:
         rel_lemma = lemmatize_verb(relation_name)
         is_forbidden = False
         blocking_axiom = None
+        blocking_axioms: list[str] = []
         reasoning = f"Checking action: {subject_name} {rel_lemma} {object_name}"
 
         if not constraints:
@@ -648,17 +649,30 @@ class OntologyManager:
 
                     if is_match and ax.get("constraint") == "FORBIDDEN":
                         is_forbidden = True
-                        blocking_axiom = ax.get("source_axiom")
+                        ax_source = ax.get("source_axiom")
+                        # Record every matching FORBIDDEN axiom for a complete
+                        # audit trail. The first match is kept as the primary
+                        # ``blocking_axiom`` for backward compatibility, while
+                        # ``blocking_axioms`` lists all rules that independently
+                        # forbid this action (e.g. a custom axiom that overlaps
+                        # the baseline protection).
+                        if ax_source and ax_source not in blocking_axioms:
+                            blocking_axioms.append(ax_source)
+                        if blocking_axiom is None:
+                            blocking_axiom = ax_source
                         reasoning += (
-                            f" | Violation of {blocking_axiom}: "
+                            f" | Violation of {ax_source}: "
                             f"{subject_name} is a {subj_type_raw} and "
                             f"{object_name} is a {obj_type_raw}."
                         )
-                        break
+                        # Continue scanning: do not break. Multiple axioms may
+                        # protect the same action, and all of them belong in
+                        # the reasoning for transparency and auditability.
 
         return {
             "permitted": not is_forbidden,
             "blocking_axiom": blocking_axiom,
+            "blocking_axioms": blocking_axioms,
             "tier": "T1",
             "reasoning": reasoning,
         }

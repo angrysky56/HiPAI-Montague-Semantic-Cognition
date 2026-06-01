@@ -115,11 +115,41 @@ class ZettelkastenSynthesizer:
         if not res or len(res) < n_clusters:
             return []
 
-        ids = [row[0] for row in res]
-        embeddings = np.array([row[1] for row in res])
+        # Collect (id, vector) pairs, skipping null vectors.
+        ids: list[str] = []
+        vectors: list[list[float]] = []
+        for row in res:
+            vec = row[1]
+            if vec is None:
+                continue
+            ids.append(row[0])
+            vectors.append(list(vec))
 
-        # 2. Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init="auto")
+        if len(vectors) < 2:
+            return []
+
+        # Guard against mixed-dimension vectors (e.g. left over from an older
+        # embedding model). Keep only those matching the most common dimension
+        # so np.array() produces a clean 2-D matrix rather than a ragged
+        # object array that would crash KMeans.
+        from collections import Counter
+
+        dim_counts = Counter(len(v) for v in vectors)
+        target_dim = dim_counts.most_common(1)[0][0]
+        kept = [
+            (i, v)
+            for i, v in zip(ids, vectors, strict=False)
+            if len(v) == target_dim
+        ]
+        ids = [i for i, _ in kept]
+        vectors = [v for _, v in kept]
+
+        embeddings = np.array(vectors, dtype=np.float32)
+
+        # 2. Perform KMeans clustering (cannot ask for more clusters than
+        #    samples).
+        k = max(1, min(n_clusters, len(vectors)))
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto")
         labels = kmeans.fit_predict(embeddings)
 
         # 3. Create concepts based on clusters

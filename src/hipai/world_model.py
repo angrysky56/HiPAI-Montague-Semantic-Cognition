@@ -12,10 +12,6 @@ import redis
 from falkordb import FalkorDB
 from sentence_transformers import SentenceTransformer
 
-# Suppress PyTorch CUDA warnings by hiding GPUs,
-# as we use CPU for the small embedding model
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 from ._utils import canonical_concept_name, lemmatize_verb
 from .models import Observation
 from .ontology_manager import OntologyManager
@@ -23,9 +19,58 @@ from .paraclete import ParacleteProtocol
 
 logger = logging.getLogger(__name__)
 
+# Node labels that carry vector embeddings and therefore need a vector index.
+_VECTOR_LABELS = ("Entity", "Concept", "Domain")
 
-# Global cache for the embedding model to avoid redundant loading across instances
-_EMBEDDING_MODEL = None
+# Process-wide cache so the (heavy) embedding model is loaded once per
+# (model_name, device) and shared across every WorldModel instance and fork.
+_EMBEDDING_MODELS: dict[tuple[str, str], SentenceTransformer] = {}
+
+
+def _load_embedding_model(model_name: str, device: str) -> SentenceTransformer:
+    """Load a SentenceTransformer once per ``(model, device)``.
+
+    The local HuggingFace cache is preferred so a normal startup never
+    re-downloads. A network download is attempted only if the model is
+    genuinely absent from the cache, and that fall-through is logged loudly
+    so an unexpected download is never silent. Set ``HIPAI_EMBEDDING_OFFLINE``
+    to forbid downloads entirely.
+    """
+    key = (model_name, device)
+    cached = _EMBEDDING_MODELS.get(key)
+    if cached is not None:
+        return cached
+
+    offline = os.environ.get("HIPAI_EMBEDDING_OFFLINE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        logger.info(
+            "Loading embedding model '%s' on %s (offline-first)...",
+            model_name,
+            device,
+        )
+        model = SentenceTransformer(
+            model_name, device=device, local_files_only=True
+        )
+    except Exception as offline_err:  # pylint: disable=broad-except
+        if offline:
+            raise RuntimeError(
+                f"Embedding model '{model_name}' is not in the local cache and "
+                "HIPAI_EMBEDDING_OFFLINE is set; pre-download it or unset the flag."
+            ) from offline_err
+        logger.warning(
+            "Embedding model '%s' not found in local cache (%s). "
+            "Attempting a one-time download...",
+            model_name,
+            offline_err,
+        )
+        model = SentenceTransformer(model_name, device=device)
+
+    _EMBEDDING_MODELS[key] = model
+    return model
 
 
 class WorldModel:
@@ -46,7 +91,6 @@ class WorldModel:
         world_id: str | None = None,
     ):
         """Initializes the World Model with a FalkorDB connection."""
-        global _EMBEDDING_MODEL
         self.host = host
         self.port = port
         self.world_id = world_id
@@ -66,29 +110,48 @@ class WorldModel:
         )
         self.graph = self.db.select_graph(self.graph_name)
 
-        # Initialize or retrieve embedding model
-        if _EMBEDDING_MODEL is None:
-            try:
-                from dotenv import load_dotenv
-                load_dotenv()
-            except ImportError:
-                pass
-            model_name = os.environ.get("EMBEDDING_MODEL_NAME", "google/embeddinggemma-300m")
-            try:
-                # Attempt strictly offline load first to avoid network HEAD requests
-                logger.info("Attempting offline load for '%s'...", model_name)
-                _EMBEDDING_MODEL = SentenceTransformer(
-                    model_name, device="cpu", local_files_only=True
-                )
-            except Exception:  # pylint: disable=broad-except
-                # Fallback to online load if not in cache
-                logger.warning(
-                    "Model '%s' not found locally or failed to load. Downloading...",
-                    model_name,
-                )
-                _EMBEDDING_MODEL = SentenceTransformer(model_name, device="cpu")
-        self.embedding_model = _EMBEDDING_MODEL
+        # ---- Embedding model -------------------------------------------------
+        # The model, device and task prompt together define the vector space.
+        # Changing any of them triggers an automatic re-embed migration in
+        # _ensure_graph so the graph never ends up with mixed-dimension vectors
+        # (the classic "expected 384 but got 768" cosine-distance failure).
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            pass
+
+        self.embedding_model_name = os.environ.get(
+            "EMBEDDING_MODEL_NAME", "google/embeddinggemma-300m"
+        )
+        # Default to CPU: the embedding model is small, the inputs are short
+        # entity names, and a long-running MCP server should not hold GPU VRAM
+        # away from other workloads. Set EMBEDDING_DEVICE=cuda to override.
+        self.embedding_device = os.environ.get("EMBEDDING_DEVICE", "cpu")
+        self.embedding_model = _load_embedding_model(
+            self.embedding_model_name, self.embedding_device
+        )
         self.vector_dim = self.embedding_model.get_sentence_embedding_dimension()
+
+        # Instruction-tuned models (e.g. EmbeddingGemma) need a task prompt for
+        # good quality. We use ONE consistent prompt for every stored and query
+        # vector so cosine comparisons stay valid. Models without named prompts
+        # (e.g. all-MiniLM-L6-v2) fall back to plain encoding automatically.
+        requested_prompt = os.environ.get("EMBEDDING_PROMPT", "STS")
+        available_prompts = getattr(self.embedding_model, "prompts", {}) or {}
+        if requested_prompt and requested_prompt in available_prompts:
+            self.embedding_prompt: str | None = requested_prompt
+        else:
+            if requested_prompt and available_prompts:
+                logger.warning(
+                    "Embedding prompt %r not available for %s; using no prompt. "
+                    "Available: %s",
+                    requested_prompt,
+                    self.embedding_model_name,
+                    sorted(available_prompts),
+                )
+            self.embedding_prompt = None
 
         # Initialize OWL Ontology Manager.
         #
@@ -129,65 +192,146 @@ class WorldModel:
         return new_wm
 
     def _ensure_graph(self):
-        """Ensure we are connected to the right graph and indices are set up."""
-        # Check and drop mismatched vector indices
-        try:
-            res = self.graph.query("CALL db.indexes()")
-            if res and res.result_set:
-                for row in res.result_set:
-                    if len(row) >= 4 and row[2] == "VECTOR":
-                        label = row[0]
-                        prop = row[1]
-                        options = row[3]
-                        if prop == "embedding" and label in ("Entity", "Concept", "Domain"):
-                            dim = None
-                            if isinstance(options, dict):
-                                dim = options.get("dimension")
-                            elif isinstance(options, str):
-                                import re
-                                m = re.search(r"dimension=(\d+)", options)
-                                if m:
-                                    dim = int(m.group(1))
+        """Ensure the graph's vector space matches the current embedding model.
 
-                            if dim is not None and dim != self.vector_dim:
-                                logger.warning(
-                                    "Mismatched dimension detected for index on %s(%s): "
-                                    "expected %d, got %d. Re-creating index.",
-                                    label,
-                                    prop,
-                                    self.vector_dim,
-                                    dim,
-                                )
-                                try:
-                                    self.graph.query(
-                                        f"DROP VECTOR INDEX FOR (n:{label}) (n.{prop})"
-                                    )
-                                except Exception as drop_err:
-                                    logger.warning(
-                                        "Failed to drop vector index on %s: %s",
-                                        label,
-                                        drop_err,
-                                    )
-        except Exception as e:
-            logger.debug("Failed to check or drop mismatched indexes: %s", e)
+        FalkorDB stores each node's ``embedding`` as a fixed-dimension vector.
+        If the embedding model (and therefore its dimension or task prompt)
+        changes between runs, previously stored vectors become incompatible and
+        ``vec.cosineDistance`` raises "Vector dimension mismatch", silently
+        breaking entity linking. To prevent this we record the active embedding
+        signature on a singleton ``:_HipaiMeta`` node and re-embed every node
+        whenever that signature changes (or legacy nodes predate it). Vector
+        indices are then (re)created with the correct dimension using the
+        FalkorDB 1.6+ ``CREATE VECTOR INDEX ... ON ...`` syntax.
+        """
+        signature = self._embedding_signature()
+        stored = self._read_embedding_meta()
 
-        # Create vector indices if they don't exist
+        if stored != signature:
+            if stored is not None:
+                logger.warning(
+                    "Embedding signature changed (%s -> %s). Re-embedding graph "
+                    "'%s' to keep vector dimensions consistent.",
+                    stored,
+                    signature,
+                    self.graph_name,
+                )
+            self._migrate_embeddings()
+            self._write_embedding_meta(signature)
+
+        self._create_vector_indices()
+
+    def _embedding_signature(self) -> str:
+        """Stable identifier for the current embedding vector space."""
+        return (
+            f"{self.embedding_model_name}|{self.vector_dim}|"
+            f"{self.embedding_prompt or 'none'}"
+        )
+
+    def _read_embedding_meta(self) -> str | None:
+        """Return the embedding signature recorded on the graph, if any."""
+        try:
+            res = self.graph.query(
+                "MATCH (m:_HipaiMeta {key: 'embedding'}) RETURN m.signature"
+            )
+            rows = getattr(res, "result_set", None) or []
+            if rows:
+                first = rows[0]
+                # Real FalkorDB returns positional list rows; guard against
+                # anything that isn't subscriptable-by-int (e.g. test mocks).
+                try:
+                    value = first[0]
+                except (KeyError, IndexError, TypeError):
+                    value = None
+                if value:
+                    return value
+        except (redis.exceptions.RedisError, KeyError, IndexError, TypeError) as e:
+            logger.debug("Could not read embedding meta: %s", e)
+        return None
+
+    def _write_embedding_meta(self, signature: str) -> None:
+        """Persist the active embedding signature on the graph."""
         try:
             self.graph.query(
-                f"CALL db.idx.vector.add('Entity', 'embedding', "
-                f"{self.vector_dim}, 'COSINE')"
+                "MERGE (m:_HipaiMeta {key: 'embedding'}) SET m.signature = $sig",
+                params={"sig": signature},
             )
-            self.graph.query(
-                f"CALL db.idx.vector.add('Concept', 'embedding', "
-                f"{self.vector_dim}, 'COSINE')"
+        except redis.exceptions.RedisError as e:
+            logger.warning("Could not persist embedding meta: %s", e)
+
+    def _drop_vector_indices(self) -> None:
+        """Drop existing vector indices (no-op if they don't exist)."""
+        for label in _VECTOR_LABELS:
+            try:
+                self.graph.query(
+                    f"DROP VECTOR INDEX FOR (n:{label}) ON (n.embedding)"
+                )
+            except redis.exceptions.RedisError as e:
+                logger.debug("Drop vector index on %s skipped: %s", label, e)
+
+    def _create_vector_indices(self) -> None:
+        """Create the per-label vector indices at the current dimension."""
+        for label in _VECTOR_LABELS:
+            try:
+                self.graph.query(
+                    f"CREATE VECTOR INDEX FOR (n:{label}) ON (n.embedding) "
+                    f"OPTIONS {{dimension: {self.vector_dim}, "
+                    f"similarityFunction: 'cosine'}}"
+                )
+            except redis.exceptions.RedisError as e:
+                # Most commonly the index already exists at the right dimension.
+                logger.debug("Vector index on %s not created: %s", label, e)
+
+    def _migrate_embeddings(self) -> None:
+        """Re-embed every embeddable node under the current model.
+
+        Embeddings are derived purely from node names/content, so they can be
+        regenerated losslessly. This repairs graphs that contain stale or
+        mixed-dimension vectors left over from a previous embedding model and
+        gives quantifier-created entities (which previously had no vector) a
+        searchable embedding.
+        """
+        self._drop_vector_indices()
+
+        try:
+            res = self.graph.query(
+                "MATCH (n) WHERE n:Entity OR n:Concept OR n:Domain "
+                "RETURN id(n) AS nid, n.name AS name, "
+                "n.content AS content, n.id AS ext"
             )
-            self.graph.query(
-                f"CALL db.idx.vector.add('Domain', 'embedding', "
-                f"{self.vector_dim}, 'COSINE')"
+        except redis.exceptions.RedisError as e:
+            logger.warning("Embedding migration scan failed: %s", e)
+            return
+
+        migrated = 0
+        for row in getattr(res, "result_set", None) or []:
+            # Expect a positional row [nid, name, content, ext]. Skip anything
+            # that doesn't conform (defensive against unexpected row shapes).
+            try:
+                nid, name, content, ext = row[0], row[1], row[2], row[3]
+            except (KeyError, IndexError, TypeError):
+                continue
+            text = name or content or ext
+            if not text:
+                continue
+            try:
+                embedding = self._get_embedding(text)
+                self.graph.query(
+                    "MATCH (n) WHERE id(n) = $nid "
+                    "SET n.embedding = vecf32($embedding)",
+                    params={"nid": nid, "embedding": embedding},
+                )
+                migrated += 1
+            except redis.exceptions.RedisError as e:
+                logger.debug("Re-embed of node id=%s failed: %s", nid, e)
+
+        if migrated:
+            logger.info(
+                "Re-embedded %d node(s) in graph '%s' at dimension %d.",
+                migrated,
+                self.graph_name,
+                self.vector_dim,
             )
-        except redis.exceptions.ResponseError as e:
-            # Indices might already exist
-            logger.debug("Vector Index initialization (might already exist): %s", e)
 
     def clear_graph(self):
         """Clears all nodes and edges from the graph."""
@@ -213,7 +357,17 @@ class WorldModel:
         self.ontology.close()
 
     def _get_embedding(self, text: str) -> list[float]:
-        return self.embedding_model.encode(text).tolist()
+        """Encode text into a normalised embedding vector.
+
+        Uses the configured instruction prompt (e.g. EmbeddingGemma's STS
+        prompt) when the model provides one, and L2-normalises the result so
+        cosine distance and dot-product similarity agree. Returns a plain
+        ``list[float]`` ready for ``vecf32()`` in Cypher.
+        """
+        kwargs: dict[str, Any] = {"normalize_embeddings": True}
+        if self.embedding_prompt:
+            kwargs["prompt_name"] = self.embedding_prompt
+        return self.embedding_model.encode(text, **kwargs).tolist()
 
     def _classify_class_term(
         self, term: str, candidate_class_names: list[str]
@@ -251,16 +405,22 @@ class WorldModel:
                 ).strip()
                 return spaced.replace("_", " ").lower()
 
-            term_emb = np.asarray(self.embedding_model.encode(term.lower()))
-            cand_texts = [_normalize(n) for n in candidate_class_names]
-            cand_embs = np.asarray(self.embedding_model.encode(cand_texts))
+            # Encode with the same prompt used for stored vectors so the
+            # comparison happens in a single, consistent vector space.
+            enc_kwargs: dict[str, Any] = {"normalize_embeddings": True}
+            if self.embedding_prompt:
+                enc_kwargs["prompt_name"] = self.embedding_prompt
 
-            # Cosine similarity.
-            term_norm = term_emb / (np.linalg.norm(term_emb) + 1e-9)
-            cand_norms = cand_embs / (
-                np.linalg.norm(cand_embs, axis=1, keepdims=True) + 1e-9
+            term_emb = np.asarray(
+                self.embedding_model.encode(term.lower(), **enc_kwargs)
             )
-            sims = cand_norms @ term_norm  # (N,)
+            cand_texts = [_normalize(n) for n in candidate_class_names]
+            cand_embs = np.asarray(
+                self.embedding_model.encode(cand_texts, **enc_kwargs)
+            )
+
+            # Vectors are already L2-normalised, so the dot product is cosine.
+            sims = cand_embs @ term_emb  # (N,)
 
             best_idx = int(np.argmax(sims))
             best_sim = float(sims[best_idx])
@@ -647,16 +807,55 @@ class WorldModel:
         label: str | None = None,
     ) -> list[dict]:
         """
-        Find nodes semantically similar to the query,
-        optionally filtered by label.
+        Find nodes semantically similar to the query, optionally filtered by
+        label. ``threshold`` is a maximum cosine *distance* (0.0 = identical,
+        1.0 = orthogonal, 2.0 = opposite).
+
+        Uses the FalkorDB vector index when a single label is given, and falls
+        back to a brute-force cosine scan otherwise or if the index is missing.
         """
         try:
             query_vec = self._get_embedding(query_text)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("Failed to embed query %r: %s", query_text, e)
+            return []
 
-            # Construct label filter if provided
-            label_clause = f":{label}" if label else ""
+        # Fast path: index-backed KNN. The index returns the k nearest nodes;
+        # we then apply the distance threshold.
+        if label:
+            try:
+                q = (
+                    "CALL db.idx.vector.queryNodes("
+                    f"'{label}', 'embedding', $k, vecf32($query_vec)) "
+                    "YIELD node, score "
+                    "WHERE score <= $threshold "
+                    "RETURN node.id AS id, node.name AS content, score AS distance "
+                    "ORDER BY score ASC"
+                )
+                result = self.graph.query(
+                    q,
+                    params={
+                        "k": top_k,
+                        "query_vec": query_vec,
+                        "threshold": threshold,
+                    },
+                )
+                return [
+                    {"id": row[0], "content": row[1], "distance": row[2]}
+                    for row in result.result_set
+                ]
+            except redis.exceptions.RedisError as e:
+                logger.debug(
+                    "Vector index search on %s unavailable (%s); "
+                    "falling back to brute-force scan.",
+                    label,
+                    e,
+                )
 
-            # FalkorDB vector search using vecf32 and vec.cosineDistance
+        # Fallback: brute-force cosine scan (used when no label is given or the
+        # index is not present yet).
+        label_clause = f":{label}" if label else ""
+        try:
             query = f"""
                 MATCH (n{label_clause})
                 WHERE n.embedding IS NOT NULL
@@ -669,13 +868,10 @@ class WorldModel:
             params = {"query_vec": query_vec, "threshold": threshold, "top_k": top_k}
             result = self.graph.query(query, params=params)
 
-            scored_nodes = []
-            for row in result.result_set:
-                scored_nodes.append(
-                    {"id": row[0], "content": row[1], "distance": row[2]}
-                )
-            return scored_nodes
-
+            return [
+                {"id": row[0], "content": row[1], "distance": row[2]}
+                for row in result.result_set
+            ]
         except redis.exceptions.RedisError as e:
             logger.exception("Semantic search failed: %s", e)
             return []

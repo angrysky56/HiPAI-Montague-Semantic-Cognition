@@ -1,3 +1,21 @@
-# Embedding Model Configuration
-# E.g. google/embeddinggemma-300m (768 dimensions) or sentence-transformers/all-MiniLM-L6-v2 (384 dimensions)
+# ---- Embedding configuration ------------------------------------------------
+# The embedding model, device and prompt together define the vector space used
+# for entity linking and concept clustering. Changing any of them is detected
+# on startup and the graph is automatically re-embedded so you never end up
+# with mixed-dimension vectors (the "expected 384 but got 768" error).
+
+# Embedding model (sentence-transformers id).
+#   google/embeddinggemma-300m              -> 768 dims, instruction-tuned (gated; needs HF login)
+#   sentence-transformers/all-MiniLM-L6-v2  -> 384 dims, tiny & fast, no prompt needed
 EMBEDDING_MODEL_NAME=google/embeddinggemma-300m
+
+# Device for the embedding model: "cpu" (default) or "cuda".
+# CPU is recommended for the MCP server so it does not hold GPU VRAM.
+EMBEDDING_DEVICE=cpu
+
+# Instruction prompt name (EmbeddingGemma only). "STS" is best for symmetric
+# name/concept similarity. Ignored automatically for models without prompts.
+EMBEDDING_PROMPT=STS
+
+# Set to 1/true to forbid any model download (fail if not already cached).
+# HIPAI_EMBEDDING_OFFLINE=1

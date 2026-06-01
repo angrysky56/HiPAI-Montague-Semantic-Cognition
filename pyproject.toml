@@ -50,3 +50,13 @@ line-ending = "auto"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+# Only collect the real suite. ``scratch/`` holds throwaway exploration
+# scripts (some named test_*.py and some async for convenience); they are not
+# part of the test suite and must not be collected.
+testpaths = ["tests"]
+# Auto mode runs every `async def test_*` as a coroutine test without needing a
+# per-test @pytest.mark.asyncio marker (existing markers still work). The
+# function loop scope isolates each test's event loop and silences the
+# pytest-asyncio default-scope deprecation warning.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
